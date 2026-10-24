@@ -100,7 +100,7 @@ impl ParadeDbSearch {
     pub(crate) fn start_projection(
         self,
         committer: CommandCommitter,
-        partition_count: u16,
+        partition_count: u32,
         node_stopped: impl Future<Output = NodeStopReason> + Send + 'static,
     ) -> SearchProjection {
         let worker = SearchProjectionWorker::new(

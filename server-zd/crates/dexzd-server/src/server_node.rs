@@ -175,11 +175,7 @@ impl ServerNode {
             StreamStore::new(&components.stream_store)
                 .map_err(|source| ServerError::StreamStore { source })?,
         );
-        let partition_count = u16::try_from(config.cluster.partition_count).map_err(|_| {
-            ServerError::ConfigValueOutOfRange {
-                field: "cluster.partitionCount",
-            }
-        })?;
+        let partition_count = config.cluster.partition_count;
         let parade_db_search = match config.search.backend {
             SearchBackendKind::Builtin => None,
             SearchBackendKind::Paradedb => Some(ParadeDbSearch::connect(&config.search).await?),
@@ -415,7 +411,7 @@ impl ServerNode {
 fn builtin_search_backend(
     config: &Config,
     engine: &EngineNode,
-    partition_count: u16,
+    partition_count: u32,
 ) -> Result<Arc<dyn SearchBackend>, ServerError> {
     let scan_budget =
         usize::try_from(config.search.builtin_scan_budget_documents).map_err(|_| {

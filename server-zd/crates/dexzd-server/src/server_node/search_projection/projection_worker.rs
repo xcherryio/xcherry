@@ -29,7 +29,7 @@ pub(crate) struct SearchProjectionWorker {
     committer: CommandCommitter,
     frames: Arc<CommittedSearchFrames>,
     queue: mpsc::Receiver<CommittedSearchFrame>,
-    partition_count: u16,
+    partition_count: u32,
     /// The last position projected for each partition; the previous position of its next frame.
     projected_positions: BTreeMap<PartitionId, LogPosition>,
 }
@@ -48,7 +48,7 @@ impl SearchProjectionWorker {
         committer: CommandCommitter,
         frames: Arc<CommittedSearchFrames>,
         queue: mpsc::Receiver<CommittedSearchFrame>,
-        partition_count: u16,
+        partition_count: u32,
     ) -> Self {
         Self {
             projector,
@@ -82,7 +82,9 @@ impl SearchProjectionWorker {
     async fn catch_up_partitions(&mut self) {
         let caught_up_sequence = self.frames.last_sequence();
         let mut rebuilt_partitions = 0_u32;
-        for partition in (0..self.partition_count).map(PartitionId) {
+        for partition in (0..self.partition_count).map(|partition| {
+            PartitionId(u16::try_from(partition).expect("validation limits partitions to 65536"))
+        }) {
             let mut retry_delay = RetryDelay::default();
             loop {
                 match self.catch_up_partition(partition).await {

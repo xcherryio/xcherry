@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use dexzd_protocol::dex::{
     FlowConfig, FlowStartOptions, FlowStatus, GetFlowSummaryRequest, IndexType,
-    InvokeExecuteMethodResponse, ServerEngine, StartFlowRequest, StepOptions,
+    InvokeExecuteMethodResponse, SearchFlowsRequest, ServerEngine, StartFlowRequest, StepOptions,
     SyncAttributeIndexRequest, Value, WaitForFlowRequest, WorkerTarget, value,
 };
 
@@ -140,6 +140,45 @@ async fn pull_worker_completes_a_single_step_flow() {
         "shutdown took {shutdown_time:?} with an open Worker stream"
     );
     worker.stop().await;
+}
+
+/// The largest partition count that validation accepts also starts and serves searches.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_largest_valid_partition_count_starts() {
+    let server =
+        DevServer::start_with_config_overrides(Some("cluster:\n  partitionCount: 65536\n")).await;
+    let mut flow_client = server.flow_client();
+    flow_client
+        .start_flow(StartFlowRequest {
+            flow_id: "partition-boundary-flow".to_owned(),
+            flow_type: FLOW_TYPE.to_owned(),
+            start_step_type: "GreetStep".to_owned(),
+            flow_start_options: Some(FlowStartOptions {
+                flow_config_override: Some(FlowConfig {
+                    worker_target: Some(WorkerTarget {
+                        is_pull_mode: true,
+                        ..WorkerTarget::default()
+                    }),
+                    ..FlowConfig::default()
+                }),
+                ..FlowStartOptions::default()
+            }),
+            request_id: "partition-boundary-request".to_owned(),
+            ..StartFlowRequest::default()
+        })
+        .await
+        .expect("StartFlow succeeds");
+    let found = flow_client
+        .search_flows(SearchFlowsRequest {
+            query: format!("FlowType = '{FLOW_TYPE}'"),
+            ..SearchFlowsRequest::default()
+        })
+        .await
+        .expect("SearchFlows succeeds")
+        .into_inner();
+    assert_eq!(found.flow_runs.len(), 1, "{found:?}");
+    let shutdown_time = server.shutdown().await;
+    assert!(shutdown_time < Duration::from_secs(10));
 }
 
 /// Unknown Flows report the Go Server's NotFound text, and Continue-As-New is unavailable.
