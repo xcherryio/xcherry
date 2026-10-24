@@ -130,6 +130,8 @@ message RunRecord {
   int64 retention_deadline_micros = 28;
   // A Step returned GracefulComplete; the attempt completes once no user Step is active.
   bool is_graceful_completion_requested = 29;
+  // Additional parents attached to this child run through SubFlow reuse.
+  repeated ParentFlowReference attached_parents = 40;
 }
 
 // Close details of a closed attempt.
@@ -301,6 +303,8 @@ message WaitStateRecord {
   // Child Flow IDs started for the SubFlow conditions, in declaration order.
   repeated string sub_flow_child_ids = 4;
   uint64 started_waiting_seq = 5;
+  // Attempt that registered these SubFlow conditions, retained across time travel.
+  uint32 sub_flow_registration_attempt = 6;
 }
 
 // Condition results consumed when the wait completed.
@@ -371,6 +375,8 @@ message OutboxRecord {
   uint64 written_seq = 5;
   // Set when the receiver acknowledged; the row is deleted when its retention timer fires.
   int64 acknowledged_at_micros = 6;
+  // Values pinned while this message is retained.
+  repeated StoredValue held_values = 7;
 }
 
 // Row of RunTable::InboxDedup, keyed by source run ID (16 bytes) and message ID (16 bytes).
@@ -385,12 +391,13 @@ message RequestDedupRecord {
   uint64 recorded_seq = 3;
 }
 
-// Row of RunTable::SubFlowResult, keyed by child Flow ID.
+// Row of RunTable::SubFlowResult, keyed by registration attempt and child Flow ID.
 message SubFlowResultRecord {
   bytes child_run_id = 1;
   uint32 child_run_attempt = 2;
   StoredFlowResult result = 3;
   uint64 received_seq = 4;
+  uint32 parent_registration_attempt = 5;
 }
 
 // Row of RunTable::HardDeleteObject: key 0x00 + Attribute key is the current object; key 0x01 +
