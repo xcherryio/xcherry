@@ -20,13 +20,13 @@ compilation and shrinking. The same budget applies to every active patch.
 | --- | --- | --- | --- |
 | `wall-clock.patch` | Apply uses the process wall clock instead of the command timestamp. | A2 repeated apply compares byte-identical writes. | Caught at seed `1592590336`, command 0; 8.7 seconds. |
 | `hash-map-iteration.patch` | Attempt snapshots emit Attributes in `HashMap` iteration order. | A2 repeated or redecoded apply compares byte-identical writes. | Caught at seed `1592590336`, command 17; 5.0 seconds. |
-| `immediate-reclaim.patch` | Releasing the last holder immediately deletes value and birth rows instead of moving the value to G. | I1 value/reference checks and time-travel survival should expose the lost value. | **Gap:** 64 × 400 commands passed in 23.0 seconds; the runner exits nonzero. |
+| `immediate-reclaim.patch` | After the last slot holder leaves, R6 records that death point while an attempt snapshot still pins the value. It deletes the value when the final pin leaves after that death point reaches window floor W; otherwise it queues G at the old death point. | `I1-window-value-reference` must catch a retained point whose in-flight snapshot needs the deleted value. | **Gap:** the faithful mutant passed PR #839's 64 × 400 apply simulation; the runner exits nonzero. The targeted `snapshot_pin_survives_window_advance_and_collects_after_attempt_completion` integration test fails on the mutant and passes without it. |
 | `retry-stale-snapshot.patch` | A failed attempt retains its snapshot after releasing locks and reuses it when the retry starts. | Invocation shape and S5 fresh-snapshot checks. | Caught by invocation shape at seed `1592590336`, command 38; 4.1 seconds. |
 
-The immediate-reclaim patch is the original R6 failure mode. Do not change it
-to force a test failure. The apply generator or checker needs coverage that
-reaches a value after its final holder is released, including a time-travel
-replay that should retain it.
+The immediate-reclaim patch is the original R6 failure mode. The apply model
+needs an attempt snapshot pinned across a slot overwrite and window advance,
+followed by attempt completion and time travel to an in-flight point. Do not
+weaken the mutant to force detection.
 
 The unpatched baseline passed in 24.1 seconds on the same machine. Durations
 include each case's targeted Cargo rebuild and will vary with build cache state.
