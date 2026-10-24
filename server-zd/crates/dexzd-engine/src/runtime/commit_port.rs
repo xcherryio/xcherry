@@ -227,6 +227,7 @@ pub trait FlowCommandCommitter: Send + Sync + 'static {
     fn check_speculative_outcome(
         &self,
         _partition: PartitionId,
+        _command: &FlowCommand,
         _speculative: &ApplyOutcome,
         _committed: &CommittedCommand,
     ) -> Result<(), ReplayMismatch> {

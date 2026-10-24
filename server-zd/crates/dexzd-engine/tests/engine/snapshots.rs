@@ -6,22 +6,163 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use dexzd_engine::{LocalStoreConfig, NodeStopReason};
+use dexzd_engine::{
+    CommitUrgency, DeterministicCommandApplier, EngineNode, EngineNodeConfig,
+    EngineNodeDependencies, EngineRuntimeHooks, EngineServices, LocalStoreConfig, NodeStopReason,
+};
+use dexzd_keyspace::row_keys::{checkpoint_key, history_record_key};
+use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, TenantId};
 use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
     WriteCondition,
 };
-use dexzd_protocol::dexzd::v1::SnapshotManifest;
-use dexzd_storage::RocksDbStoreOptions;
+use dexzd_protocol::dex::{
+    FlowResetType, FlowTimeoutPolicy, ResetFlowRequest, StartFlowRequest, WorkerTarget,
+};
+use dexzd_protocol::dexzd::v1::{
+    CheckpointRecord, FlowCommand, FlowStartCommand, HistoryRecord, RunSettings, SnapshotManifest,
+    TimeTravelCommand, command_reply, flow_command::Command,
+};
+use dexzd_storage::{
+    LocalReadView, LocalStore, RestoredLocalStore, RocksDbStoreOptions, WriteBatch,
+};
 use prost::Message;
 use tokio::sync::Notify;
 
 use crate::harness::{CountingApplier, PARTITION_COUNT, RecordingRuntime, TestCluster};
+
+async fn start_deterministic_node(
+    cluster: &TestCluster,
+    config: &EngineNodeConfig,
+) -> (
+    EngineNode,
+    Arc<RestoredLocalStore>,
+    PartitionHasher,
+    Arc<RecordingRuntime>,
+) {
+    let captured = Arc::new(Mutex::new(None));
+    let captured_for_factory = captured.clone();
+    let runtime = Arc::new(RecordingRuntime::default());
+    let runtime_for_factory = runtime.clone();
+    let node = EngineNode::start(
+        config,
+        EngineNodeDependencies {
+            object_store: cluster.object_store.clone(),
+            clock: cluster.clock.clone(),
+            applier: Arc::new(DeterministicCommandApplier),
+        },
+        move |services: EngineServices| {
+            *captured_for_factory.lock().expect("capture lock") =
+                Some((services.local_store, services.partition_hasher));
+            EngineRuntimeHooks {
+                committed_commands: runtime_for_factory.clone(),
+                rebuilder: runtime_for_factory,
+            }
+        },
+    )
+    .await
+    .expect("deterministic node starts");
+    let (store, hasher) = captured
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("services captured");
+    (node, store, hasher, runtime)
+}
+
+async fn commit_flow_start(node: &EngineNode, hasher: &PartitionHasher, flow_id: &str) -> RunId {
+    let flow_hash = hasher.flow_hash(TenantId::DEFAULT, flow_id);
+    let context = dexzd_apply::ApplyContext {
+        partition: hasher.partition_of(flow_hash),
+        flow_hash,
+    };
+    let run_id = RunId([9; 16]);
+    let command = FlowCommand {
+        flow_id: flow_id.to_owned(),
+        command: Some(Command::FlowStart(FlowStartCommand {
+            new_run_id: run_id.0.to_vec(),
+            request: Some(StartFlowRequest {
+                flow_id: flow_id.to_owned(),
+                flow_type: "ReplayFlow".to_owned(),
+                start_step_type: "StartStep".to_owned(),
+                request_id: "start-replay-flow".to_owned(),
+                ..StartFlowRequest::default()
+            }),
+            settings: Some(RunSettings {
+                history_window_semantic_events: 10_000,
+                history_prune_chunk_semantic_events: 1000,
+                max_retained_superseded_bytes: 256 << 20,
+                retention_after_close_micros: 7 * 24 * 3600 * 1_000_000,
+                wire_inline_threshold_bytes: 100,
+                max_value_bytes: 16 << 20,
+                checkpoint_min_written_bytes: 1 << 20,
+                checkpoint_max_commands: 10_000,
+                request_dedup_capacity: 1000,
+                max_run_state_bytes: 1 << 30,
+                max_active_step_executions: 10_000,
+            }),
+            resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
+            worker_target: Some(WorkerTarget {
+                is_pull_mode: true,
+                ..WorkerTarget::default()
+            }),
+            hard_delete_objects: Vec::new(),
+            request_fingerprint: Vec::new(),
+        })),
+        ..FlowCommand::default()
+    };
+    let (_, ticket) = node
+        .committer()
+        .submit(context, command, CommitUrgency::Prompt)
+        .expect("start submitted");
+    let committed = ticket.wait().await.expect("start committed");
+    assert!(matches!(
+        committed.outcome.reply.reply,
+        Some(command_reply::Reply::StartFlow(_))
+    ));
+    run_id
+}
+
+async fn submit_time_travel(
+    node: &EngineNode,
+    hasher: &PartitionHasher,
+    flow_id: &str,
+    run_id: RunId,
+) -> (
+    FlowCommand,
+    Result<dexzd_engine::CommittedCommand, dexzd_engine::CommitError>,
+) {
+    let flow_hash = hasher.flow_hash(TenantId::DEFAULT, flow_id);
+    let context = dexzd_apply::ApplyContext {
+        partition: hasher.partition_of(flow_hash),
+        flow_hash,
+    };
+    let command = FlowCommand {
+        flow_id: flow_id.to_owned(),
+        run_id: run_id.0.to_vec(),
+        command: Some(Command::TimeTravel(TimeTravelCommand {
+            request: Some(ResetFlowRequest {
+                flow_id: flow_id.to_owned(),
+                reset_type: FlowResetType::Beginning as i32,
+                run_attempt: 1,
+                reason: "replay verification".to_owned(),
+                skip_writes_reapply: true,
+                ..ResetFlowRequest::default()
+            }),
+        })),
+        ..FlowCommand::default()
+    };
+    let (stamped, ticket) = node
+        .committer()
+        .submit(context, command, CommitUrgency::Prompt)
+        .expect("travel submitted");
+    (stamped, ticket.wait().await)
+}
 
 #[derive(Default)]
 struct DelayedSnapshotDelete {
@@ -151,13 +292,158 @@ async fn restart_restores_the_snapshot_and_replays_only_later_batches() {
     let first = cluster.start_in_memory().await;
     first.commit_prompt("restore-flow", 3).await;
     first.node.take_snapshot().await.expect("snapshot succeeds");
-    first.commit_prompt("restore-flow", 2).await;
+    let mut last_committed_command = None;
+    for _ in 0..2 {
+        let (command, ticket) = first
+            .submit("restore-flow", CommitUrgency::Prompt)
+            .expect("submit tail command");
+        ticket.wait().await.expect("tail command commits");
+        last_committed_command = Some(command);
+    }
+    let last_committed_command = last_committed_command.expect("tail has a command");
+    let continuous = first
+        .node
+        .committer()
+        .committed_view()
+        .expect("continuous state view");
     drop(first);
 
     let second = cluster.start_in_memory().await;
-    assert_eq!(second.applier.applied_commands().len(), 2);
+    assert_eq!(
+        second.applier.applied_commands().len(),
+        2 * (1 + usize::from(cfg!(debug_assertions)))
+    );
     assert_eq!(second.committed_count("restore-flow").await, 5);
+    let recovered = second
+        .node
+        .committer()
+        .committed_view()
+        .expect("recovered state view");
+    dexzd_storage::compare_store_views(
+        &continuous,
+        &recovered,
+        &[
+            // Restoring a snapshot starts a new local store lineage.
+            dexzd_storage::CanonicalizedStoreField::NodeLineageId,
+            // The restored store starts a new snapshot sequence.
+            dexzd_storage::CanonicalizedStoreField::NodeLastSnapshotNumber,
+            // Recovery records progress under its new writer epoch.
+            dexzd_storage::CanonicalizedStoreField::PartitionApplied,
+            // Recovery acquires a new writer epoch.
+            dexzd_storage::CanonicalizedStoreField::PartitionAppliedEpoch,
+        ],
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "snapshot plus log differs after Flow {} command {:?}: {error}",
+            last_committed_command.flow_id, last_committed_command.command_id
+        )
+    });
     second.node.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_only_time_travel_target_is_counted_as_unverifiable() {
+    let cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.commit.debug_replay_checks = true;
+    let (first, _, hasher, _) = start_deterministic_node(&cluster, &config).await;
+    let run_id = commit_flow_start(&first, &hasher, "snapshot-only-flow").await;
+    first.take_snapshot().await.expect("snapshot succeeds");
+    drop(first);
+
+    let (second, _, hasher, replayed_runtime) = start_deterministic_node(&cluster, &config).await;
+    assert!(replayed_runtime.committed_commands().is_empty());
+    let (_, result) = submit_time_travel(&second, &hasher, "snapshot-only-flow", run_id).await;
+    let committed = result.expect("snapshot-only target remains usable");
+    assert!(matches!(
+        committed.outcome.reply.reply,
+        Some(command_reply::Reply::TimeTravel(_))
+    ));
+    assert_eq!(second.time_travel_verification_counts(), (0, 1));
+    second.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_tail_replay_detects_a_corrupted_time_travel_rebuild() {
+    let cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.commit.debug_replay_checks = true;
+    let (first, _, hasher, _) = start_deterministic_node(&cluster, &config).await;
+    first.take_snapshot().await.expect("snapshot succeeds");
+    let run_id = commit_flow_start(&first, &hasher, "tail-replay-flow").await;
+    drop(first);
+
+    let (second, store, hasher, replayed_runtime) =
+        start_deterministic_node(&cluster, &config).await;
+    assert_eq!(
+        replayed_runtime.committed_commands().len(),
+        1,
+        "the tail was replayed"
+    );
+    let (_, verified) = submit_time_travel(&second, &hasher, "tail-replay-flow", run_id).await;
+    assert!(matches!(
+        verified
+            .expect("replayed point verifies")
+            .outcome
+            .reply
+            .reply,
+        Some(command_reply::Reply::TimeTravel(_))
+    ));
+    assert_eq!(second.time_travel_verification_counts(), (1, 0));
+    let flow_hash = hasher.flow_hash(TenantId::DEFAULT, "tail-replay-flow");
+    let history_bytes = store
+        .get(
+            ColumnFamily::History,
+            &history_record_key(flow_hash, run_id, 1),
+        )
+        .expect("read replayed history")
+        .expect("history exists");
+    let history = HistoryRecord::decode(history_bytes.as_slice()).expect("history decodes");
+    assert!(history.is_semantic);
+    let checkpoint_key = checkpoint_key(flow_hash, run_id, history.attempt, history.seq);
+    let checkpoint_bytes = store
+        .get(ColumnFamily::History, &checkpoint_key)
+        .expect("read checkpoint")
+        .expect("replayed checkpoint exists");
+    let mut checkpoint =
+        CheckpointRecord::decode(checkpoint_bytes.as_slice()).expect("checkpoint decodes");
+    checkpoint
+        .run_status
+        .as_mut()
+        .expect("checkpoint has status")
+        .closed_at_micros += 1;
+    let mut batch = WriteBatch::new();
+    batch.put(
+        ColumnFamily::History,
+        checkpoint_key,
+        checkpoint.encode_to_vec(),
+    );
+    store.write(batch).expect("corrupt checkpoint");
+
+    let (command, result) = submit_time_travel(&second, &hasher, "tail-replay-flow", run_id).await;
+    let error = result.expect_err("the engine rejects a corrupted rebuild");
+    assert!(crate::harness::is_partition_stopped(&error), "{error:?}");
+    let error_report = error.to_string();
+    let command_id_hex: String = command
+        .command_id
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert!(error_report.contains("tail-replay-flow"), "{error_report}");
+    assert!(error_report.contains(&command_id_hex), "{error_report}");
+    assert!(error_report.contains("log seq"), "{error_report}");
+    assert!(
+        error_report.contains(&format!("semantic key ({run_id}, 1, 1)")),
+        "{error_report}"
+    );
+    assert_eq!(
+        second.halted_partitions(),
+        vec![hasher.partition_of(flow_hash)]
+    );
+    assert_eq!(second.time_travel_verification_counts(), (1, 0));
+    assert!(!command.command_id.is_empty());
+    second.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -197,7 +483,10 @@ async fn log_batches_are_deleted_only_after_a_snapshot_is_old_enough() {
 
     let restarted = cluster.start_in_memory().await;
     assert_eq!(restarted.committed_count("cleanup-flow").await, 5);
-    assert_eq!(restarted.applier.applied_commands().len(), 1);
+    assert_eq!(
+        restarted.applier.applied_commands().len(),
+        1 + usize::from(cfg!(debug_assertions))
+    );
     restarted.node.shutdown().await.expect("lease released");
 }
 
