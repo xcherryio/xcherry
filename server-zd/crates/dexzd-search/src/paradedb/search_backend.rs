@@ -351,7 +351,7 @@ fn is_transient_sqlstate(sqlstate: &str) -> bool {
         || sqlstate.starts_with("53")
         || matches!(
             sqlstate,
-            "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
+            "55P03" | "57014" | "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
         )
 }
 
@@ -410,6 +410,8 @@ mod tests {
             ("08006", true),
             ("08P01", true),
             ("53100", true),
+            ("55P03", true),
+            ("57014", true),
             ("57P01", true),
             ("57P02", true),
             ("57P03", true),
