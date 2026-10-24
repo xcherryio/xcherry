@@ -48,6 +48,19 @@ impl Default for LeaseConfig {
     }
 }
 
+impl LeaseConfig {
+    /// Acquires the lease, or returns `None` if cancellation arrives before its write begins.
+    pub async fn acquire_until_cancelled(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        clock: Arc<dyn WallClock>,
+        node: &NodeConfig,
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> Result<Option<LeaseHandle>, MetadataError> {
+        acquire_lease_inner(store, clock, node, self, Some(cancellation)).await
+    }
+}
+
 /// Local monotonic lease validity observed by the engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LeaseStatus {
@@ -189,6 +202,17 @@ pub async fn acquire_lease(
     node: &NodeConfig,
     config: &LeaseConfig,
 ) -> Result<LeaseHandle, MetadataError> {
+    let acquired = acquire_lease_inner(store, clock, node, config, None).await?;
+    Ok(acquired.expect("a lease acquisition without cancellation must complete"))
+}
+
+async fn acquire_lease_inner(
+    store: Arc<dyn ObjectStore>,
+    clock: Arc<dyn WallClock>,
+    node: &NodeConfig,
+    config: &LeaseConfig,
+    mut cancellation: Option<&mut watch::Receiver<bool>>,
+) -> Result<Option<LeaseHandle>, MetadataError> {
     let duration_micros =
         i64::try_from(config.duration.as_micros()).map_err(|_| MetadataError::InvalidConfig {
             field: "lease duration",
@@ -212,6 +236,12 @@ pub async fn acquire_lease(
     let held_lease_poll_interval = HELD_LEASE_POLL_LIMIT.min(config.duration / 3);
     let mut has_reported_wait = false;
     loop {
+        if cancellation
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            return Ok(None);
+        }
         let existing = store.get(&key).await?;
         let previous = existing
             .as_ref()
@@ -250,9 +280,30 @@ pub async fn acquire_lease(
                 }
                 let until_available = Duration::from_micros((available_at - now) as u64);
                 let poll_delay = jittered_poll_delay(held_lease_poll_interval);
-                tokio::time::sleep(until_available.min(poll_delay)).await;
+                let delay = until_available.min(poll_delay);
+                if let Some(cancellation_receiver) = cancellation.as_mut() {
+                    tokio::select! {
+                        () = tokio::time::sleep(delay) => {}
+                        changed = cancellation_receiver.changed() => {
+                            if changed.is_ok() && *cancellation_receiver.borrow() {
+                                return Ok(None);
+                            }
+                            if changed.is_err() {
+                                tokio::time::sleep(delay).await;
+                            }
+                        }
+                    }
+                } else {
+                    tokio::time::sleep(delay).await;
+                }
                 continue;
             }
+        }
+        if cancellation
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            return Ok(None);
         }
         let version = previous
             .as_ref()
@@ -324,13 +375,13 @@ pub async fn acquire_lease(
         drop(receiver.borrow_and_update());
         let (shutdown_sender, shutdown_receiver) = oneshot::channel();
         let renewal_task = tokio::spawn(async move { owner.run(shutdown_receiver).await });
-        return Ok(LeaseHandle {
+        return Ok(Some(LeaseHandle {
             node_id: node.node_id.clone(),
             epoch,
             status: receiver,
             renewal_task: Some(renewal_task),
             shutdown_sender: Some(shutdown_sender),
-        });
+        }));
     }
 }
 

@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use dexzd_engine::{EngineStartError, NodeStopReason};
+use tokio::sync::watch;
 
 use crate::embedded_s3::EmbeddedS3;
 use crate::server_logging::TerminationSignals;
@@ -161,23 +162,28 @@ pub fn run_from_command_line() -> Result<(), ServerError> {
             let log_directory = configuration.dev.log_directory.clone();
             serve_until_terminated(
                 log_directory.as_deref(),
-                start_dev_server_with_config(configuration),
+                move |mut cancellation| async move {
+                    start_dev_server_with_config(configuration, &mut cancellation).await
+                },
             )
         }
         ServerCommand::Serve(options) => {
             let configuration = config::Config::load_file(&options.config)?;
-            serve_until_terminated(None, async move {
-                server_node::start_server(&configuration, None).await
+            serve_until_terminated(None, move |mut cancellation| async move {
+                server_node::start_server(&configuration, None, &mut cancellation).await
             })
         }
     }
 }
 
 /// Installs logging, starts the server, and stops it gracefully on the first SIGINT or SIGTERM.
-fn serve_until_terminated(
+fn serve_until_terminated<StartFuture>(
     log_directory: Option<&Path>,
-    start: impl Future<Output = Result<RunningServer, ServerError>>,
-) -> Result<(), ServerError> {
+    start: impl FnOnce(watch::Receiver<bool>) -> StartFuture,
+) -> Result<(), ServerError>
+where
+    StartFuture: Future<Output = Result<Option<RunningServer>, ServerError>>,
+{
     server_logging::install(log_directory)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -185,13 +191,26 @@ fn serve_until_terminated(
         .map_err(|source| ServerError::AsyncRuntime { source })?;
     runtime.block_on(async {
         let mut termination = TerminationSignals::register();
-        let mut start = std::pin::pin!(start);
+        let (cancellation_sender, cancellation) = watch::channel(false);
+        let mut start = std::pin::pin!(start(cancellation));
         let server = tokio::select! {
-            started = &mut start => started?,
+            started = &mut start => match started? {
+                Some(server) => server,
+                None => return Ok(()),
+            },
             () = termination.received() => {
-                // Dropping a startup that holds the node lease would keep the lease until it expires.
-                tracing::info!("termination signal during startup; stopping once startup finishes");
-                return start.await?.shutdown().await;
+                cancellation_sender.send_replace(true);
+                match start.await? {
+                    Some(server) => {
+                        // Dropping a leased startup delays release until its cleanup task runs.
+                        tracing::info!("termination signal during startup; stopping once startup finishes");
+                        return server.shutdown().await;
+                    }
+                    None => {
+                        tracing::info!("termination signal while waiting for the node lease; startup cancelled");
+                        return Ok(());
+                    }
+                }
             }
         };
         let shutdown = server.shutdown_token();
@@ -209,14 +228,18 @@ fn serve_until_terminated(
 ///
 /// The caller installs logging.
 pub async fn start_dev_server(options: &DevCommandOptions) -> Result<RunningServer, ServerError> {
-    start_dev_server_with_config(config::Config::load_dev(options)?).await
+    let (_cancellation_sender, mut cancellation) = watch::channel(false);
+    let started =
+        start_dev_server_with_config(config::Config::load_dev(options)?, &mut cancellation).await?;
+    Ok(started.expect("dev startup without cancellation must return a server"))
 }
 
 async fn start_dev_server_with_config(
     mut configuration: config::Config,
-) -> Result<RunningServer, ServerError> {
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<Option<RunningServer>, ServerError> {
     let embedded_s3 =
         EmbeddedS3::start(&configuration.dev, &configuration.object_store.bucket).await?;
     configuration.object_store.endpoint = embedded_s3.endpoint();
-    server_node::start_server(&configuration, Some(embedded_s3)).await
+    server_node::start_server(&configuration, Some(embedded_s3), cancellation).await
 }
