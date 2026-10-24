@@ -143,9 +143,13 @@ impl CommittedLog {
         self.lock().first_violation.clone()
     }
 
-    /// Whether committed state holds an undelivered outbox row or a pending hard-delete object.
-    pub(crate) fn has_cross_flow_work(&self) -> bool {
-        !self.lock().cross_flow_work_rows.is_empty()
+    /// Whether committed state holds a row of `table`, Outbox or HardDeleteObject, that waits
+    /// for delivery or deletion.
+    pub(crate) fn has_cross_flow_work(&self, table: RunTable) -> bool {
+        self.lock()
+            .cross_flow_work_rows
+            .iter()
+            .any(|key| parse_run_key(key).is_ok_and(|parsed| parsed.table == table))
     }
 
     pub(crate) fn has_committed_marker(&self, marker: &str) -> bool {

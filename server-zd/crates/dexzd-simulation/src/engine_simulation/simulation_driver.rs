@@ -18,7 +18,7 @@ use dexzd_cluster_metadata::MetadataError;
 use dexzd_engine::{
     EngineLocalStore, EngineStartError, NodeStopReason, SeededEngineIdSourceForTest,
 };
-use dexzd_keyspace::TenantId;
+use dexzd_keyspace::{RunTable, TenantId};
 use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
 };
@@ -294,8 +294,11 @@ impl Simulation {
                     let kind = self.draw_restart_kind();
                     match self.rng.random_range(0..4) {
                         0 | 1 => self.wait_for_pipelined_log_writes().await,
-                        2 => self.wait_for_cross_flow_work().await,
-                        _ => {}
+                        2 => self.wait_for_cross_flow_work(RunTable::Outbox).await,
+                        _ => {
+                            self.wait_for_cross_flow_work(RunTable::HardDeleteObject)
+                                .await
+                        }
                     }
                     self.crash_and_restart(kind).await?;
                 }
@@ -317,10 +320,12 @@ impl Simulation {
     }
 
     /// Waits briefly until committed state holds an undelivered outbox row or a pending
-    /// hard-delete object, which the successor must then finish.
-    async fn wait_for_cross_flow_work(&self) {
+    /// hard-delete object, as `table` selects, which the successor must then finish.
+    async fn wait_for_cross_flow_work(&self, table: RunTable) {
         let deadline = Instant::now() + PIPELINED_WRITE_WAIT;
-        while !self.environment.committed_log.has_cross_flow_work() && Instant::now() < deadline {
+        while !self.environment.committed_log.has_cross_flow_work(table)
+            && Instant::now() < deadline
+        {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }

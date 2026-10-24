@@ -172,7 +172,7 @@ impl NodeObjectStore {
             _ => Duration::from_millis(rng.random_range(1..20)),
         };
         let is_effect_applied = rng.random_bool(0.5);
-        let crash_landing_kind = rng.random_range(0..3);
+        let crash_landing_kind = rng.random_range(0..4);
         let linger = Duration::from_millis(rng.random_range(0..3_000));
         drop(faults);
         self.storage.trace.record(&format!(
@@ -186,7 +186,7 @@ impl NodeObjectStore {
             crash_landing: match crash_landing_kind {
                 0 => CrashLanding::AtDeadline,
                 1 => CrashLanding::AfterSuccessorLease(linger),
-                _ => CrashLanding::AfterSuccessorServes(linger / 10),
+                _ => CrashLanding::AfterSuccessorServes(linger / 100),
             },
         }
     }
