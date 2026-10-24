@@ -15,7 +15,8 @@ use dexzd_engine::{
     CommitUrgency, DeterministicCommandApplier, EngineNode, EngineNodeConfig,
     EngineNodeDependencies, EngineRuntimeHooks, EngineServices, LocalStoreConfig, NodeStopReason,
 };
-use dexzd_keyspace::{PartitionHasher, RunId, TenantId};
+use dexzd_keyspace::row_keys::{checkpoint_key, history_record_key};
+use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, TenantId};
 use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
     WriteCondition,
@@ -24,10 +25,12 @@ use dexzd_protocol::dex::{
     FlowResetType, FlowTimeoutPolicy, ResetFlowRequest, StartFlowRequest, WorkerTarget,
 };
 use dexzd_protocol::dexzd::v1::{
-    FlowCommand, FlowStartCommand, RunSettings, SnapshotManifest, TimeTravelCommand, command_reply,
-    flow_command::Command,
+    CheckpointRecord, FlowCommand, FlowStartCommand, HistoryRecord, RunSettings, SnapshotManifest,
+    TimeTravelCommand, command_reply, flow_command::Command,
 };
-use dexzd_storage::{RestoredLocalStore, RocksDbStoreOptions};
+use dexzd_storage::{
+    LocalReadView, LocalStore, RestoredLocalStore, RocksDbStoreOptions, WriteBatch,
+};
 use prost::Message;
 use tokio::sync::Notify;
 
@@ -358,6 +361,75 @@ async fn snapshot_only_time_travel_target_is_counted_as_unverifiable() {
         Some(command_reply::Reply::TimeTravel(_))
     ));
     assert_eq!(second.time_travel_verification_counts(), (0, 1));
+    second.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_tail_replay_detects_a_corrupted_time_travel_rebuild() {
+    let cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.commit.debug_replay_checks = true;
+    let (first, _, hasher, _) = start_deterministic_node(&cluster, &config).await;
+    first.take_snapshot().await.expect("snapshot succeeds");
+    let run_id = commit_flow_start(&first, &hasher, "tail-replay-flow").await;
+    drop(first);
+
+    let (second, store, hasher, replayed_runtime) =
+        start_deterministic_node(&cluster, &config).await;
+    assert_eq!(
+        replayed_runtime.committed_commands().len(),
+        1,
+        "the tail was replayed"
+    );
+    let (_, verified) = submit_time_travel(&second, &hasher, "tail-replay-flow", run_id).await;
+    assert!(matches!(
+        verified
+            .expect("replayed point verifies")
+            .outcome
+            .reply
+            .reply,
+        Some(command_reply::Reply::TimeTravel(_))
+    ));
+    assert_eq!(second.time_travel_verification_counts(), (1, 0));
+    let flow_hash = hasher.flow_hash(TenantId::DEFAULT, "tail-replay-flow");
+    let history_bytes = store
+        .get(
+            ColumnFamily::History,
+            &history_record_key(flow_hash, run_id, 1),
+        )
+        .expect("read replayed history")
+        .expect("history exists");
+    let history = HistoryRecord::decode(history_bytes.as_slice()).expect("history decodes");
+    assert!(history.is_semantic);
+    let checkpoint_key = checkpoint_key(flow_hash, run_id, history.attempt, history.seq);
+    let checkpoint_bytes = store
+        .get(ColumnFamily::History, &checkpoint_key)
+        .expect("read checkpoint")
+        .expect("replayed checkpoint exists");
+    let mut checkpoint =
+        CheckpointRecord::decode(checkpoint_bytes.as_slice()).expect("checkpoint decodes");
+    checkpoint
+        .run_status
+        .as_mut()
+        .expect("checkpoint has status")
+        .closed_at_micros += 1;
+    let mut batch = WriteBatch::new();
+    batch.put(
+        ColumnFamily::History,
+        checkpoint_key,
+        checkpoint.encode_to_vec(),
+    );
+    store.write(batch).expect("corrupt checkpoint");
+
+    let (command, result) = submit_time_travel(&second, &hasher, "tail-replay-flow", run_id).await;
+    let error = result.expect_err("the engine rejects a corrupted rebuild");
+    assert!(crate::harness::is_partition_stopped(&error), "{error:?}");
+    assert_eq!(
+        second.halted_partitions(),
+        vec![hasher.partition_of(flow_hash)]
+    );
+    assert_eq!(second.time_travel_verification_counts(), (1, 0));
+    assert!(!command.command_id.is_empty());
     second.shutdown().await.expect("lease released");
 }
 
