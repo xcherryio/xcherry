@@ -191,6 +191,7 @@ pub(crate) fn apply_run_purge(
         reply: ok_reply(),
         effects: Vec::new(),
         run_id: Some(run_id),
+        replayed: None,
     }))
 }
 

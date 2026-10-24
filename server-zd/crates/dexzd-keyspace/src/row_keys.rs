@@ -204,6 +204,20 @@ pub fn history_record_key(flow_hash: FlowHash, run_id: RunId, seq: u64) -> Vec<u
     )
 }
 
+/// Key of one History row's compact metadata, ordered by seq before table and attempt.
+pub fn history_row_metadata_key(
+    flow_hash: FlowHash,
+    run_id: RunId,
+    seq: u64,
+    history_table: RunTable,
+    attempt: u32,
+) -> Vec<u8> {
+    let mut suffix = seq.to_be_bytes().to_vec();
+    suffix.push(history_table as u8);
+    suffix.extend_from_slice(&attempt.to_be_bytes());
+    run_key(flow_hash, run_id, RunTable::HistoryRowMetadata, &suffix)
+}
+
 /// Key of a checkpoint.
 pub fn checkpoint_key(flow_hash: FlowHash, run_id: RunId, attempt: u32, seq: u64) -> Vec<u8> {
     let mut suffix = attempt.to_be_bytes().to_vec();

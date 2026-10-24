@@ -17,8 +17,10 @@ CREATE TABLE dexzd_visibility_runs (
     sa_keyword jsonb NOT NULL DEFAULT '{}'::jsonb,
     sa_text jsonb NOT NULL DEFAULT '{}'::jsonb,
     sa_number jsonb NOT NULL DEFAULT '{}'::jsonb,
+    sa_number_types jsonb NOT NULL DEFAULT '{}'::jsonb,
     sa_datetime jsonb NOT NULL DEFAULT '{}'::jsonb,
     sa_bool jsonb NOT NULL DEFAULT '{}'::jsonb,
+    sa_wire jsonb NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (tenant_id, run_id)
 );
 

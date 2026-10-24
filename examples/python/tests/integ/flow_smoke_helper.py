@@ -42,6 +42,8 @@ class FlowSmokeEntry:
     name: str
     trigger: Callable[["FlowSmokeHttpClient"], Awaitable[tuple[str, str]]]
     flags: FlowSmokeFlags = field(default_factory=FlowSmokeFlags)
+    # Names the feature that makes server-zd reject this sample.
+    server_zd_unsupported_feature: str = ""
 
 
 class FlowSmokeHttpClient:

@@ -9,3 +9,5 @@
 //! Derived views of state: history events, the search document, and the Flow list index.
 
 pub(crate) mod history_events;
+pub(crate) mod search_document;
+pub(crate) mod work_queue_permissions;

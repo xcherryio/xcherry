@@ -49,10 +49,8 @@ pub(crate) enum ValueHolder {
     /// An output collected for the Flow result.
     FlowResult { index: u32 },
     /// A child Flow result kept for SubFlow conditions.
-    #[expect(dead_code, reason = "Used by SubFlow results (task A6).")]
     SubFlowResult { child_flow_id: String },
     /// A recorded RPC reply for request ID deduplication.
-    #[expect(dead_code, reason = "Used by RPC commits.")]
     RpcReply { request_id: String },
     /// A complete value pinned by an unexpired outbox message.
     OutboxMessage {

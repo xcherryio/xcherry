@@ -31,6 +31,8 @@ final class FlowSmokeEntry {
     final Object body;
     final FlowSmokeFlags flags;
     final FlowSmokeTrigger trigger;
+    // Names the feature that makes server-zd reject this sample; empty when supported.
+    final String serverZDUnsupportedFeature;
 
     private FlowSmokeEntry(
             final String name,
@@ -40,6 +42,18 @@ final class FlowSmokeEntry {
             final Object body,
             final FlowSmokeFlags flags,
             final FlowSmokeTrigger trigger) {
+        this(name, method, path, query, body, flags, trigger, "");
+    }
+
+    private FlowSmokeEntry(
+            final String name,
+            final String method,
+            final String path,
+            final Map<String, String> query,
+            final Object body,
+            final FlowSmokeFlags flags,
+            final FlowSmokeTrigger trigger,
+            final String serverZDUnsupportedFeature) {
         this.name = name;
         this.method = method;
         this.path = path;
@@ -47,6 +61,11 @@ final class FlowSmokeEntry {
         this.body = body;
         this.flags = flags;
         this.trigger = trigger;
+        this.serverZDUnsupportedFeature = serverZDUnsupportedFeature;
+    }
+
+    FlowSmokeEntry withServerZDUnsupportedFeature(final String feature) {
+        return new FlowSmokeEntry(name, method, path, query, body, flags, trigger, feature);
     }
 
     static FlowSmokeEntry get(

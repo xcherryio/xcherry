@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod worker_harness;
+
 use std::collections::BTreeMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -57,12 +59,14 @@ use dex_examples_rust::products::subscription::{
     CANCEL_SUBSCRIPTION, DESCRIBE_SUBSCRIPTION, SubscriptionFlow, SubscriptionRequest,
     SubscriptionState, UPDATE_SUBSCRIPTION_CHARGE,
 };
+use dex_examples_rust::shared::{WorkerMode, example_pull_worker_options};
 use dex_sdk::{
     AttributeMatch, BlobCache, BlobCacheConfig, Client, ClientOptions, FlowStatus, SdkError,
     SdkResult, StepExecutionId, StopFlowOptions, TimerId, WaitForAttributeOptions,
     WaitForStepCompletionOptions, Worker, WorkerOptions,
 };
 use tempfile::TempDir;
+use worker_harness::{await_pull_registration, read_worker_mode};
 
 struct DexEnvironment {
     client: Client,
@@ -90,22 +94,28 @@ impl DexEnvironment {
             )
             .expect("open Rust examples cache"),
         );
+        let worker_mode = read_worker_mode();
+        let worker_options = match worker_mode {
+            WorkerMode::Push => WorkerOptions::new()
+                .server_address(&server_address)
+                .bind_address(&worker_address),
+            WorkerMode::Pull => WorkerOptions::new()
+                .server_address(&server_address)
+                .pull(example_pull_worker_options()),
+        };
         let worker = Arc::new(
-            Worker::try_new(
-                registry.clone(),
-                Arc::clone(&cache),
-                WorkerOptions::new()
-                    .server_address(&server_address)
-                    .bind_address(&worker_address),
-            )
-            .expect("create Rust examples Worker"),
+            Worker::try_new(registry.clone(), Arc::clone(&cache), worker_options)
+                .expect("create Rust examples Worker"),
         );
         let thread_worker = Arc::clone(&worker);
         let worker_thread = thread::Builder::new()
             .name("dex-rust-examples-worker".to_string())
             .spawn(move || thread_worker.start())
             .expect("start Rust examples Worker thread");
-        await_worker(worker_port, &worker_thread);
+        match worker_mode {
+            WorkerMode::Push => await_worker(worker_port, &worker_thread),
+            WorkerMode::Pull => await_pull_registration(&worker),
+        }
         let client = Client::try_new(
             registry,
             Arc::clone(&cache),

@@ -8,19 +8,22 @@
 
 use dexzd_keyspace::row_keys::{
     RequestKind, attempt_record_key, channel_message_key, channel_name_prefix, history_record_key,
-    prefix_range, request_dedup_key, request_dedup_order_key, run_named_key, run_singleton_key,
+    history_row_metadata_key, prefix_range, request_dedup_key, request_dedup_order_key,
+    run_named_key, run_singleton_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, FlowHash, RunId, RunTable, TenantId, flow_directory_key, run_table_prefix,
 };
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, AttributeRecord, ChannelMessageRecord, ChannelMetaRecord, FlowDirectoryRecord,
-    HistoryRecord, LockRecord, PermissionSetRecord, RequestDedupRecord, RunRecord,
+    HistoryRecord, HistoryRowMetadata, LockRecord, RequestDedupRecord, RunRecord,
     SearchDocumentRecord, StepCounterRecord, StepExecutionRecord,
 };
+use prost::Message;
 
 use crate::ApplyError;
 use crate::state_access::FlowTransaction;
+use crate::values::{ValueHolder, release_stored_value};
 
 /// Upper bound for scans that read a whole table of one run.
 pub(crate) const WHOLE_TABLE: usize = usize::MAX;
@@ -85,10 +88,6 @@ impl RunRows {
         transaction.put_message(ColumnFamily::Flow, key, record);
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn attempt_record(
         &self,
         transaction: &FlowTransaction<'_>,
@@ -333,25 +332,6 @@ impl RunRows {
             .collect())
     }
 
-    pub(crate) fn permission_set(
-        &self,
-        transaction: &FlowTransaction<'_>,
-    ) -> Result<PermissionSetRecord, ApplyError> {
-        let key = run_singleton_key(self.flow_hash, self.run_id, RunTable::PermissionSet);
-        Ok(transaction
-            .get_message(ColumnFamily::Flow, &key, "permission set")?
-            .unwrap_or_default())
-    }
-
-    pub(crate) fn put_permission_set(
-        &self,
-        transaction: &mut FlowTransaction<'_>,
-        record: &PermissionSetRecord,
-    ) {
-        let key = run_singleton_key(self.flow_hash, self.run_id, RunTable::PermissionSet);
-        transaction.put_message(ColumnFamily::Flow, key, record);
-    }
-
     pub(crate) fn request_dedup(
         &self,
         transaction: &FlowTransaction<'_>,
@@ -392,15 +372,36 @@ impl RunRows {
                 run_table_prefix(self.flow_hash, self.run_id, RunTable::RequestDedup);
             evicted_key.push(*kind_byte);
             evicted_key.extend_from_slice(request_id_bytes);
+            if *kind_byte == RequestKind::InvokeRpc as u8 {
+                let previous: Option<RequestDedupRecord> =
+                    transaction.get_message(ColumnFamily::Flow, &evicted_key, "request dedup")?;
+                if let Some(output) = previous
+                    .as_ref()
+                    .and_then(|previous| previous.reply.as_ref())
+                    .and_then(|reply| reply.reply.as_ref())
+                    .and_then(|reply| match reply {
+                        dexzd_protocol::dexzd::v1::command_reply::Reply::Rpc(rpc) => {
+                            rpc.output.as_ref()
+                        }
+                        _ => None,
+                    })
+                {
+                    let request_id = std::str::from_utf8(request_id_bytes).map_err(|error| {
+                        ApplyError::InvariantViolation {
+                            detail: format!("RPC dedup request ID is invalid UTF-8: {error}"),
+                        }
+                    })?;
+                    let holder = ValueHolder::RpcReply {
+                        request_id: request_id.to_owned(),
+                    };
+                    release_stored_value(transaction, *self, output, &holder, record.recorded_seq)?;
+                }
+            }
             transaction.delete(ColumnFamily::Flow, evicted_key);
         }
         Ok(())
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn put_search_document(
         &self,
         transaction: &mut FlowTransaction<'_>,
@@ -410,10 +411,6 @@ impl RunRows {
         transaction.put_message(ColumnFamily::Flow, key, record);
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn search_document(
         &self,
         transaction: &FlowTransaction<'_>,
@@ -428,13 +425,28 @@ impl RunRows {
         record: &HistoryRecord,
     ) {
         let key = history_record_key(self.flow_hash, self.run_id, record.seq);
+        let row_size_bytes = u64::try_from(key.len() + record.encoded_len())
+            .expect("a history record fits in a u64 byte count");
         transaction.put_message(ColumnFamily::History, key, record);
+        transaction.put_message(
+            ColumnFamily::Flow,
+            history_row_metadata_key(
+                self.flow_hash,
+                self.run_id,
+                record.seq,
+                RunTable::HistoryRecord,
+                0,
+            ),
+            &HistoryRowMetadata {
+                row_size_bytes,
+                is_semantic: record.is_semantic,
+                is_external_input: record.is_external_input,
+                attempt: record.attempt,
+                timestamp_micros: record.timestamp_micros,
+            },
+        );
     }
 
-    #[expect(
-        dead_code,
-        reason = "Used by time travel and projections (tasks A4 and A7)."
-    )]
     pub(crate) fn history_record(
         &self,
         transaction: &FlowTransaction<'_>,

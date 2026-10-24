@@ -12,12 +12,23 @@
 //! value table, and every slot or pinned call that uses one is a holder. A value whose holder
 //! set becomes empty moves to table G and is deleted when the time travel window passes it.
 
+mod garbage;
+mod storage_accounting;
+mod time_travel;
 mod value_holder;
 
+pub(crate) use garbage::enforce_superseded_byte_cap;
+#[expect(unused_imports, reason = "Available to window maintenance handlers.")]
+pub(crate) use garbage::{prune_garbage, superseded_bytes_over_cap};
+pub(crate) use storage_accounting::{
+    active_run_storage_bytes, projected_superseded_value_bytes, reconcile_run_storage,
+    total_run_storage_bytes,
+};
+pub(crate) use time_travel::rewrite_holders_for_time_travel;
 pub(crate) use value_holder::ValueHolder;
 
 use dexzd_keyspace::row_keys::{prefix_range, value_garbage_key, value_holder_key, value_row_key};
-use dexzd_keyspace::{ColumnFamily, RunTable, ValueId, ValueReference};
+use dexzd_keyspace::{ColumnFamily, FlowHash, RunId, RunTable, ValueId, ValueReference};
 use dexzd_protocol::dex::Value;
 use dexzd_protocol::dex::value::Kind;
 use dexzd_protocol::dexzd::v1::{
@@ -27,6 +38,7 @@ use dexzd_protocol::dexzd::v1::{
 use prost::Message;
 
 use crate::ApplyError;
+use crate::FlowStateReader;
 use crate::state_access::{FlowTransaction, RunRows};
 
 /// Why a value from a client or Worker cannot be stored.
@@ -58,6 +70,7 @@ impl ValueRejection {
 }
 
 /// Assigns value IDs for the values one command stores.
+#[derive(Clone)]
 pub(crate) struct ValueIdAllocator {
     run_seq: u64,
     next_index: u32,
@@ -86,6 +99,36 @@ impl ValueIdAllocator {
 pub(crate) struct ValueLimits {
     pub(crate) wire_inline_threshold_bytes: u32,
     pub(crate) max_value_bytes: u64,
+}
+
+/// Checks a Worker value without creating state rows or holders.
+pub(crate) fn validate_value(
+    transaction: &FlowTransaction<'_>,
+    rows: RunRows,
+    limits: ValueLimits,
+    value: &Value,
+) -> Result<Result<(), ValueRejection>, ApplyError> {
+    if let Some(reference_text) = reference_text(value) {
+        let Some(reference) = parse_own_reference(reference_text, rows) else {
+            return Ok(Err(ValueRejection::UnknownReference {
+                reference: reference_text.to_owned(),
+            }));
+        };
+        if value_birth(transaction, rows, reference.value_id)?.is_none() {
+            return Ok(Err(ValueRejection::UnknownReference {
+                reference: reference_text.to_owned(),
+            }));
+        }
+        return Ok(Ok(()));
+    }
+    let size_bytes = u64::try_from(value.encoded_len()).unwrap_or(u64::MAX);
+    if size_bytes > limits.max_value_bytes {
+        return Ok(Err(ValueRejection::TooLarge {
+            size_bytes,
+            max_value_bytes: limits.max_value_bytes,
+        }));
+    }
+    Ok(Ok(()))
 }
 
 /// Stores `value` for `holder` and returns how state rows keep it.
@@ -184,7 +227,7 @@ pub(crate) fn release_stored_value(
     holder: &ValueHolder,
     current_seq: u64,
 ) -> Result<(), ApplyError> {
-    let Some((value_id, size_bytes)) = table_value_id(stored) else {
+    let Some((value_id, _)) = table_value_id(stored) else {
         return Ok(());
     };
     // Removing a holder that does not exist does nothing (plan section 10.2).
@@ -212,7 +255,9 @@ pub(crate) fn release_stored_value(
     transaction.put_message(
         ColumnFamily::Flow,
         value_garbage_key(rows.flow_hash, rows.run_id, current_seq, value_id),
-        &ValueGarbageRecord { size_bytes },
+        &ValueGarbageRecord {
+            size_bytes: stored_value_size(stored),
+        },
     );
     Ok(())
 }
@@ -248,17 +293,35 @@ pub(crate) fn load_stored_value(
     rows: RunRows,
     stored: &StoredValue,
 ) -> Result<Option<Value>, ApplyError> {
+    load_stored_value_with(rows, stored, |key| {
+        transaction.get(ColumnFamily::Value, key)
+    })
+}
+
+fn load_stored_value_with(
+    rows: RunRows,
+    stored: &StoredValue,
+    read_value_row: impl Fn(&[u8]) -> Result<Option<Vec<u8>>, ApplyError>,
+) -> Result<Option<Value>, ApplyError> {
     match &stored.kind {
         Some(stored_value::Kind::InlineValue(value)) => Ok(Some(value.clone())),
         Some(stored_value::Kind::TableValue(_)) => {
             let Some((value_id, _)) = table_value_id(stored) else {
                 return Ok(None);
             };
-            let record: Option<ValueRecord> = transaction.get_message(
-                ColumnFamily::Value,
-                &value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id),
-                "value",
-            )?;
+            let key = value_row_key(rows.flow_hash, rows.run_id, RunTable::Value, value_id);
+            let record = read_value_row(&key)?;
+            let record = record
+                .map(|bytes| {
+                    ValueRecord::decode(bytes.as_slice()).map_err(|error| {
+                        ApplyError::CorruptState {
+                            table: "value",
+                            key: key.iter().map(|byte| format!("{byte:02x}")).collect(),
+                            detail: error.to_string(),
+                        }
+                    })
+                })
+                .transpose()?;
             Ok(record.and_then(|record| record.value))
         }
         Some(stored_value::Kind::HardDeleteObject(_)) | None => Ok(None),
@@ -307,10 +370,6 @@ pub(crate) fn complete_value_for_outbox(
 }
 
 /// Size accounted for a stored value.
-#[expect(
-    dead_code,
-    reason = "Used by storage accounting and the window byte cap (task A5)."
-)]
 pub(crate) fn stored_value_size(stored: &StoredValue) -> u64 {
     match &stored.kind {
         Some(stored_value::Kind::InlineValue(value)) => {
@@ -320,6 +379,26 @@ pub(crate) fn stored_value_size(stored: &StoredValue) -> u64 {
         Some(stored_value::Kind::HardDeleteObject(object)) => object.size_bytes,
         None => 0,
     }
+}
+
+/// Loads a wire reference; invalid, foreign, hard-delete, or collected references return `None`; state failures return errors.
+pub fn load_for_wire(
+    state: &dyn FlowStateReader,
+    flow_hash: FlowHash,
+    run_id: RunId,
+    reference: &str,
+) -> Result<Option<Value>, ApplyError> {
+    let Ok(parsed): Result<ValueReference, _> = reference.parse() else {
+        return Ok(None);
+    };
+    if parsed.run_id != run_id {
+        return Ok(None);
+    }
+    load_stored_value_with(
+        RunRows::new(flow_hash, run_id),
+        &table_value(parsed.value_id, 0, false),
+        |key| Ok(state.get(ColumnFamily::Value, key)?),
+    )
 }
 
 /// True when the value is a JSON null or absent, which deletes an Attribute.

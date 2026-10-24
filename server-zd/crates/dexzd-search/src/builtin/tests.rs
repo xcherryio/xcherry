@@ -344,7 +344,7 @@ async fn defaults_and_clamps_page_size() {
             .search(request("", None, requested_size, &fields))
             .await
             .expect("first bounded page");
-        assert_eq!(first.entries.len(), super::MAX_PAGE_SIZE);
+        assert_eq!(first.entries.len(), crate::search_backend::MAX_PAGE_SIZE);
         let token = first.next_page_token.expect("remaining runs");
         let second = backend
             .search(request("", Some(&token), requested_size, &fields))
