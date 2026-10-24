@@ -965,7 +965,9 @@ dependencies = [
  "dexzd-keyspace",
  "dexzd-protocol",
  "prost",
+ "prost-types",
  "thiserror",
+ "uuid",
 ]
 
 [[package]]

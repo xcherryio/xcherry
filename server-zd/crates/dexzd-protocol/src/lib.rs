@@ -22,6 +22,10 @@ pub mod dex {
 /// Generated server-zd internal persistent formats from `server-zd/proto/dexzd/v1`.
 pub mod dexzd {
     /// Version 1 of the internal formats.
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "The protobuf generator owns these declarations."
+    )]
     pub mod v1 {
         tonic::include_proto!("dexzd.v1");
     }
