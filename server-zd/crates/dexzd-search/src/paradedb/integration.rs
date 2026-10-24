@@ -618,6 +618,8 @@ async fn paradedb_matches_builtin_evaluator() {
         .expect("reconnect terminated backend connection");
     assert_eq!(recovered.entries.len(), 3);
 
+    super::projection::run_projector_scenarios_for_test(&database_url, &client, nonce).await;
+
     client
         .batch_execute("DROP TABLE dexzd_visibility_runs")
         .await

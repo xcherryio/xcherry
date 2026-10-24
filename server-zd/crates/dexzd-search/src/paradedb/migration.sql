@@ -1,7 +1,8 @@
 CREATE EXTENSION IF NOT EXISTS pg_search;
 
-CREATE TABLE dexzd_visibility_runs (
+CREATE TABLE IF NOT EXISTS dexzd_visibility_runs (
     tenant_id text NOT NULL,
+    partition_id integer NOT NULL DEFAULT 0,
     run_id text NOT NULL,
     workflow_id text NOT NULL,
     workflow_type text NOT NULL,
@@ -24,13 +25,17 @@ CREATE TABLE dexzd_visibility_runs (
     PRIMARY KEY (tenant_id, run_id)
 );
 
-CREATE INDEX dexzd_visibility_default_idx ON dexzd_visibility_runs
+ALTER TABLE dexzd_visibility_runs ADD COLUMN IF NOT EXISTS partition_id integer NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS dexzd_visibility_partition_idx ON dexzd_visibility_runs
+    (tenant_id, partition_id, run_id);
+CREATE INDEX IF NOT EXISTS dexzd_visibility_default_idx ON dexzd_visibility_runs
     (tenant_id, is_running DESC, close_time_ns DESC NULLS LAST, start_time_ns DESC, run_id COLLATE "C");
-CREATE INDEX dexzd_visibility_flow_type_idx ON dexzd_visibility_runs
+CREATE INDEX IF NOT EXISTS dexzd_visibility_flow_type_idx ON dexzd_visibility_runs
     (tenant_id, flow_type, is_running DESC, close_time_ns DESC NULLS LAST, start_time_ns DESC, run_id COLLATE "C");
-CREATE INDEX dexzd_visibility_workflow_id_idx ON dexzd_visibility_runs
+CREATE INDEX IF NOT EXISTS dexzd_visibility_workflow_id_idx ON dexzd_visibility_runs
     (tenant_id, workflow_id);
-CREATE INDEX dexzd_visibility_bm25_idx ON dexzd_visibility_runs USING paradedb (
+CREATE INDEX IF NOT EXISTS dexzd_visibility_bm25_idx ON dexzd_visibility_runs USING paradedb (
     (tenant_id::pdb.literal),
     (run_id::pdb.literal),
     (workflow_id::pdb.literal),
@@ -44,4 +49,9 @@ CREATE INDEX dexzd_visibility_bm25_idx ON dexzd_visibility_runs USING paradedb (
     (sa_number::pdb.whitespace('columnar=true')),
     (sa_datetime::pdb.whitespace('columnar=true')),
     (sa_bool::pdb.whitespace('columnar=true'))
+);
+
+CREATE TABLE IF NOT EXISTS dexzd_visibility_progress (
+    partition_id integer PRIMARY KEY,
+    applied_position bigint NOT NULL
 );

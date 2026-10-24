@@ -19,7 +19,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::SearchError;
 use crate::page_token::PagePosition;
 
-pub(super) struct IndexedDocument {
+pub(crate) struct IndexedDocument {
     record: SearchDocumentRecord,
     run_id: RunId,
     status: FlowStatus,
@@ -29,7 +29,7 @@ pub(super) struct IndexedDocument {
 }
 
 impl IndexedDocument {
-    pub(super) fn decode(
+    pub(crate) fn decode(
         encoded: &[u8],
         tenant_id: TenantId,
         run_id: RunId,

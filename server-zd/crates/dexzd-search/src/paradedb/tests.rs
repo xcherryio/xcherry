@@ -8,13 +8,20 @@
 
 use std::collections::BTreeMap;
 
+use dexzd_apply::{ApplyOutcome, StateWrite};
 use dexzd_keyspace::TenantId;
+use dexzd_keyspace::row_keys::{prefix_range, run_singleton_key, tenant_run_index_key};
+use dexzd_keyspace::{ColumnFamily, FlowHash, IndexKind, PartitionId, RunId, RunTable, run_prefix};
 use dexzd_protocol::dex::{self, IndexType};
-use dexzd_protocol::dexzd::v1::SearchAttributeValue;
+use dexzd_protocol::dexzd::v1::{SearchAttributeValue, SearchDocumentRecord};
 use dexzd_visibility_query::{SearchDocument, SearchValue};
+use prost::Message;
 
 use super::wire_value::{decode_wire_value, encode_wire_value};
-use super::{MIGRATION_SQL, SearchRow, SearchRowError, SqlValue, upsert_statement};
+use super::{
+    MIGRATION_SQL, ProjectionError, SearchDocumentChange, SearchRow, SearchRowError, SqlValue,
+    extract_search_document_changes, upsert_statement,
+};
 
 #[derive(Default)]
 struct Document(BTreeMap<String, SearchValue>);
@@ -49,6 +56,8 @@ fn migration_has_tenant_first_and_versioned_documents() {
     assert!(MIGRATION_SQL.contains("(tenant_id, flow_type"));
     assert!(MIGRATION_SQL.contains("(tenant_id, workflow_id)"));
     assert!(MIGRATION_SQL.contains("(tenant_id::pdb.literal)"));
+    assert!(MIGRATION_SQL.contains("dexzd_visibility_progress"));
+    assert!(MIGRATION_SQL.contains("partition_id integer"));
     for bucket in [
         "sa_keyword",
         "sa_text",
@@ -60,6 +69,72 @@ fn migration_has_tenant_first_and_versioned_documents() {
     ] {
         assert!(MIGRATION_SQL.contains(bucket));
     }
+}
+
+#[test]
+fn extracts_ordered_document_writes_and_run_purge() {
+    let partition_id = PartitionId(3);
+    let tenant_id = TenantId(7);
+    let flow_hash = FlowHash(42);
+    let run_id = RunId([5; 16]);
+    let record = SearchDocumentRecord {
+        version: 1,
+        tenant_id: tenant_id.0,
+        run_id: run_id.as_bytes().to_vec(),
+        ..Default::default()
+    };
+    let encoded_document = record.encode_to_vec();
+    let (start, end) = prefix_range(&run_prefix(flow_hash, run_id));
+    let outcome = ApplyOutcome {
+        writes: vec![
+            StateWrite::Put {
+                column_family: ColumnFamily::Flow,
+                key: run_singleton_key(flow_hash, run_id, RunTable::RunRecord),
+                value: vec![0],
+            },
+            StateWrite::Put {
+                column_family: ColumnFamily::Flow,
+                key: run_singleton_key(flow_hash, run_id, RunTable::SearchDocument),
+                value: encoded_document.clone(),
+            },
+            StateWrite::Delete {
+                column_family: ColumnFamily::PartitionIndex,
+                key: tenant_run_index_key(
+                    partition_id,
+                    IndexKind::SearchDocument,
+                    tenant_id,
+                    flow_hash,
+                    run_id,
+                ),
+            },
+            StateWrite::DeleteRange {
+                column_family: ColumnFamily::Flow,
+                start,
+                end,
+            },
+        ],
+        effects: vec![],
+        reply: Default::default(),
+        run_id: Some(run_id),
+    };
+    let changes = extract_search_document_changes(partition_id, &outcome).unwrap();
+    assert_eq!(
+        changes,
+        vec![
+            SearchDocumentChange::Upsert {
+                tenant_id,
+                run_id,
+                encoded_document,
+            },
+            SearchDocumentChange::Delete { tenant_id, run_id },
+        ]
+    );
+    let mut missing_delete = outcome;
+    missing_delete.writes.remove(2);
+    assert!(matches!(
+        extract_search_document_changes(partition_id, &missing_delete),
+        Err(ProjectionError::InvalidState(_))
+    ));
 }
 
 #[test]
