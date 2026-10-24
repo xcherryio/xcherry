@@ -12,6 +12,7 @@ mod command_applier;
 mod commit;
 mod effects;
 mod engine_node;
+mod long_poll;
 mod recovery;
 mod runtime;
 mod snapshots;
@@ -34,10 +35,14 @@ pub use recovery::{
     CommittedCommandSink, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
     PartitionRuntimeRebuilder, RuntimeRebuildError,
 };
+pub use runtime::HardDeleteUploads as RuntimeHardDeleteUploads;
+pub use runtime::ReplayMismatch as SpeculativeOutcomeMismatch;
 pub use runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
-    CommittedFlowCommand, FlowAddress, FlowCommandCommitter, HardDeleteReadError,
-    HardDeleteValueReader, RpcInvokeError, RpcWorkerInvoker, RuntimeEffectSink,
-    WorkerRpcInvocation, WorkerRpcResult,
+    CommittedFlowCommand, FlowAddress, FlowCommandCommitter, FlowRuntimeDependencies,
+    FlowRuntimeRegistry, HardDeleteReadError, HardDeleteUploadError, HardDeleteUploadOutcome,
+    HardDeleteValueReader, HardDeleteValueUploader, PendingInvocation, ProposalResult,
+    RpcInvokeError, RpcWorkerInvoker, RuntimeConfig, RuntimeEffectSink, RuntimeError,
+    WorkerRpcInvocation, WorkerRpcResult, default_run_settings, grpc_code,
 };
 pub use snapshots::{SnapshotConfig, SnapshotError};

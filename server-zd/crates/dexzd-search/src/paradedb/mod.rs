@@ -10,13 +10,22 @@
 
 mod query;
 mod row;
+mod search_backend;
+mod search_result;
 mod upsert;
+mod wire_value;
 
+use dexzd_keyspace::TenantId;
 use tokio_postgres::types::ToSql;
 
 pub use query::{PageCursor, SqlTranslationError, translate_query};
 pub use row::{SearchRow, SearchRowError};
+pub use search_backend::{ParadeDbSearchBackend, ProjectionVisibilityWait};
 pub use upsert::upsert_statement;
+
+pub(crate) fn tenant_column_value(tenant_id: TenantId) -> String {
+    tenant_id.0.to_string()
+}
 
 /// Fresh ParadeDB migration for versioned Dex run documents.
 pub const MIGRATION_SQL: &str = include_str!("migration.sql");

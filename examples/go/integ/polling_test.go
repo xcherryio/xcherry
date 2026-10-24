@@ -31,6 +31,7 @@ import (
 )
 
 func TestPollingStreamsJobProgressAndCompletesWithJobResult(t *testing.T) {
+	skipWhenServerZD(t, "failure policies")
 	ctx := integrationContext(t)
 	flowID := newFlowID(t, "pattern-polling")
 	_, err := integClient.StartFlow(ctx, registry.Polling, flowID, nil, dex.StartFlowOptions{})

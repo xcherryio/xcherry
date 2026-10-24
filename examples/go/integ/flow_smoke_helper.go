@@ -48,6 +48,8 @@ type flowSmokeEntry struct {
 	name    string
 	trigger func(t *testing.T) (flowID string, runID string)
 	flags   flowSmokeFlags
+	// serverZDUnsupportedFeature names the feature that makes server-zd reject this sample.
+	serverZDUnsupportedFeature string
 }
 
 type flowHistoryPage struct {

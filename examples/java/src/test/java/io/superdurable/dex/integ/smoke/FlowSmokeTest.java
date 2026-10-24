@@ -16,25 +16,39 @@
 
 package io.superdurable.dex.integ.smoke;
 
-import org.junit.jupiter.api.Test;
+import io.superdurable.dex.integ.ServerZDSkips;
+import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.extension.ExtendWith;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 @ExtendWith(SharedFlowSmokeExtension.class)
 public class FlowSmokeTest {
-    @Test
-    void allRegisteredFlowsViaController() throws Exception {
+    @TestFactory
+    List<DynamicTest> allRegisteredFlowsViaController() {
         final FlowSmokeEnvironment environment = SharedFlowSmokeExtension.environment();
         final var catalog = FlowSmokeCatalog.entries(environment);
         assertFalse(catalog.isEmpty(), "flow smoke catalog is empty");
-        for (final FlowSmokeEntry entry : catalog) {
-            final FlowSmokeTriggerResult result = entry.trigger.trigger(environment);
-            if (result.flowId == null || result.flowId.isEmpty()) {
-                throw new AssertionError(entry.name + ": controller response did not include flowID");
-            }
-            FlowSmokeHelper.assertStartStep(entry, result.flowId, result.runId);
-            FlowSmokeHelper.assertNoUnexpectedFailures(entry, result.flowId, result.runId);
+        return catalog.stream()
+                .map(entry -> DynamicTest.dynamicTest(
+                        entry.name, () -> runFlowSmokeEntry(environment, entry)))
+                .collect(Collectors.toList());
+    }
+
+    private static void runFlowSmokeEntry(
+            final FlowSmokeEnvironment environment, final FlowSmokeEntry entry) throws Exception {
+        if (!entry.serverZDUnsupportedFeature.isEmpty()) {
+            ServerZDSkips.skipWhenServerZD(entry.serverZDUnsupportedFeature);
         }
+        final FlowSmokeTriggerResult result = entry.trigger.trigger(environment);
+        if (result.flowId == null || result.flowId.isEmpty()) {
+            throw new AssertionError(entry.name + ": controller response did not include flowID");
+        }
+        FlowSmokeHelper.assertStartStep(entry, result.flowId, result.runId);
+        FlowSmokeHelper.assertNoUnexpectedFailures(entry, result.flowId, result.runId);
     }
 }
