@@ -49,13 +49,13 @@ use search_projection::{ParadeDbSearch, SearchProjection};
 
 /// Part of the budget for open calls, so the engine still stops cleanly after a stuck call.
 const GRPC_DRAIN_BUDGET: Duration = Duration::from_secs(4);
-/// Shutdown budgets of the later steps; with the gRPC drain they total ten seconds.
-const EFFECT_TASKS_STOP_BUDGET: Duration = Duration::from_secs(1);
+/// Shutdown budgets of the later steps; with the gRPC drain they total 12.5 seconds.
+const EFFECT_TASKS_STOP_BUDGET: Duration = Duration::from_secs(2);
 const SEARCH_PROJECTION_STOP_BUDGET: Duration = Duration::from_secs(1);
 /// Covers the engine's three-second task stop and its lease release.
 const ENGINE_STOP_BUDGET: Duration = Duration::from_millis(3_500);
-const STREAM_STORE_CLOSE_BUDGET: Duration = Duration::from_millis(250);
-const EMBEDDED_S3_STOP_BUDGET: Duration = Duration::from_millis(250);
+const STREAM_STORE_CLOSE_BUDGET: Duration = Duration::from_secs(1);
+const EMBEDDED_S3_STOP_BUDGET: Duration = Duration::from_secs(1);
 /// gRPC keepalive, equal to the Go Server's.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -75,7 +75,7 @@ impl RunningServer {
         self.local_address
     }
 
-    /// Stops gracefully within ten seconds and returns how serving ended.
+    /// Stops gracefully within 12.5 seconds and returns how serving ended.
     ///
     /// Returns [`ServerError::NodeStopped`] when the node had already stopped for another reason,
     /// such as a lost lease, and [`ServerError::ShutdownIncomplete`] when a shutdown step overran

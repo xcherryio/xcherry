@@ -257,7 +257,7 @@ async fn sigterm_during_recovery_exits_zero_and_releases_the_lease() {
     // Only recovery reads the log, after the lease is taken, so slow reads hold startup there.
     primary
         .set_fault_rules(&format!(
-            r#"[{{"operation":"GetObject","key_prefix":"{PRIMARY_PREFIX}/log/","action":{{"type":"delay","milliseconds":2000}}}}]"#
+            r#"[{{"operation":"GetObject","key_prefix":"{PRIMARY_PREFIX}/log/","action":{{"type":"delay","milliseconds":5000}}}}]"#
         ))
         .await;
     let first_address = free_loopback_address();
