@@ -11,6 +11,7 @@
 mod commit_path;
 mod harness;
 mod lease_lifecycle;
+mod log_replay;
 mod node_identity;
 mod recovery;
 mod snapshot_fencing;
