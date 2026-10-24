@@ -440,3 +440,59 @@ async fn a_stalled_hard_delete_read_times_out_the_method_before_dispatch() {
     );
     harness.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_result_whose_uploads_end_after_the_method_deadline_fails_and_deletes_them() {
+    let (durable, object_fault) = super::SwitchableFault::install(
+        vec![dexzd_object_store::ObjectStoreOperation::Put],
+        dexzd_object_store::FaultAction::Delay(std::time::Duration::from_secs(10)),
+    );
+    let harness = EffectHarness::with_config(durable, crate::effects::EffectsConfig::default());
+    harness.rebuild_all_partitions().await;
+    let mut request = start_request("order-1");
+    request.step_options = Some(dexzd_protocol::dex::StepOptions {
+        wait_for_timeout_seconds: 5,
+        heartbeat_timeout_seconds: 600,
+        ..dexzd_protocol::dex::StepOptions::default()
+    });
+    let run_id = harness.start_flow(request, settings());
+    let wait_for = harness.dispatcher.next_dispatch().await;
+    object_fault.set_enabled(true);
+
+    // The result arrives in time, but its hard-delete upload ends after the deadline.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    wait_for.complete_wait_for(InvokeWaitForMethodResponse {
+        upsert_attributes: vec![hard_delete_write("secret", string_value("card-4242"))],
+        ..InvokeWaitForMethodResponse::default()
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    harness.settle().await;
+    assert!(
+        harness
+            .runtime
+            .commands_matching(is_method_completed)
+            .is_empty()
+    );
+    let failures = harness.runtime.commands_matching(super::is_attempt_failed);
+    let Some(flow_command::Command::StepAttemptFailed(failure)) = &failures[0].command.command
+    else {
+        panic!("expected a failure");
+    };
+    assert_eq!(failure.attempt, 1);
+    assert_eq!(
+        failure.kind,
+        dexzd_protocol::dexzd::v1::StepAttemptFailureKind::MethodTimeout as i32
+    );
+    let owner = harness
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("order-1"), run_id);
+    let listing = harness
+        .durable
+        .objects
+        .list(&owner.object_key_prefix(), None, 1000)
+        .await
+        .expect("list succeeds");
+    assert!(listing.objects.is_empty(), "the late upload is deleted");
+    assert_eq!(pending_upload_count(&harness), 0);
+    harness.shutdown().await;
+}
