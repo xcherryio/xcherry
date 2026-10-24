@@ -683,7 +683,7 @@ impl Simulation {
             summary.injected_faults = observations
                 .injected_faults
                 .iter()
-                .map(|(fault, count)| (format!("{fault:?}"), *count))
+                .map(|((fault, effect), count)| (format!("{fault:?}/{effect:?}"), *count))
                 .collect();
             summary.precondition_failed_puts = name_counts(&observations.precondition_failed_puts);
             summary.deleted_objects = name_counts(&observations.deleted_objects);

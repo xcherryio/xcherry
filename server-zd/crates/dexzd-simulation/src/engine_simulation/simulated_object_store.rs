@@ -55,6 +55,21 @@ impl InjectedFault {
     ];
 }
 
+/// What an injected fault did to its call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum FaultEffect {
+    /// The call completed normally, only late.
+    Delayed,
+    /// The call failed before it reached storage.
+    FailedBeforeEffect,
+    /// A read ran, but the caller got an error instead of its result.
+    ReadDiscarded,
+    /// A write took effect, and the caller got an unknown outcome.
+    WrittenOutcomeUnknown,
+    /// A write did not take effect, and the caller got an unknown outcome.
+    NotWrittenOutcomeUnknown,
+}
+
 /// What happens to one call, drawn when the call starts so timing never changes the draws.
 #[derive(Debug, Clone, Copy)]
 struct CallPlan {
@@ -72,7 +87,8 @@ struct FaultState {
 /// What processes did to object storage, so coverage checks can show the risky paths ran.
 #[derive(Debug, Default)]
 pub(crate) struct StorageObservations {
-    pub(crate) injected_faults: BTreeMap<InjectedFault, u64>,
+    /// Faults by kind and by what they did to the call, counted once the call's effect is known.
+    pub(crate) injected_faults: BTreeMap<(InjectedFault, FaultEffect), u64>,
     /// Conditional writes the store rejected, by key class.
     pub(crate) precondition_failed_puts: BTreeMap<&'static str, u64>,
     /// Objects deleted, by key class.
@@ -164,11 +180,6 @@ impl NodeObjectStore {
         };
         let is_effect_applied = rng.random_bool(0.5);
         drop(faults);
-        if let Some(fault) = fault {
-            self.observe(|observations| {
-                *observations.injected_faults.entry(fault).or_default() += 1;
-            });
-        }
         self.trace.record(&format!(
             "{} object-store {operation} {} {fault:?} applied={is_effect_applied}",
             self.process_label,
@@ -181,12 +192,20 @@ impl NodeObjectStore {
         }
     }
 
-    /// Runs one call under its plan. `effect` performs the call on the shared store.
-    async fn run_call<T, F, Fut>(
+    fn observe_fault(&self, fault: InjectedFault, effect: FaultEffect) {
+        self.observe(|observations| {
+            *observations
+                .injected_faults
+                .entry((fault, effect))
+                .or_default() += 1;
+        });
+    }
+
+    /// Runs one read under a new plan. `effect` performs the read on the shared store.
+    async fn run_read<T, F, Fut>(
         &self,
         operation: ObjectStoreOperation,
         key: &str,
-        is_write: bool,
         effect: F,
     ) -> ObjectStoreResult<T>
     where
@@ -199,56 +218,145 @@ impl NodeObjectStore {
         let plan = self.plan_call(operation, key);
         tokio::time::sleep(plan.delay).await;
         if self.is_cut_off() {
+            return std::future::pending().await;
+        }
+        let Some(fault) = plan.fault else {
+            return effect().await;
+        };
+        let (effect_kind, result) = match fault {
+            InjectedFault::SlowResponse => (FaultEffect::Delayed, effect().await),
+            InjectedFault::ResponseLost => {
+                let discarded = effect().await;
+                drop(discarded);
+                (
+                    FaultEffect::ReadDiscarded,
+                    Err(injected_error(
+                        operation,
+                        key,
+                        ObjectStoreErrorKind::Transient,
+                        "injected lost response",
+                    )),
+                )
+            }
+            _ => (
+                FaultEffect::FailedBeforeEffect,
+                Err(rejection_before_effect(operation, key, fault)),
+            ),
+        };
+        self.observe_fault(fault, effect_kind);
+        result
+    }
+
+    /// Runs one write under a new plan; see [`Self::run_write_with_plan`].
+    async fn run_write<T, F, Fut>(
+        &self,
+        operation: ObjectStoreOperation,
+        key: &str,
+        effect: F,
+        is_written: fn(&ObjectStoreResult<T>) -> bool,
+    ) -> ObjectStoreResult<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ObjectStoreResult<T>>,
+    {
+        if self.is_cut_off() {
+            return std::future::pending().await;
+        }
+        let plan = self.plan_call(operation, key);
+        self.run_write_with_plan(plan, operation, key, effect, is_written)
+            .await
+    }
+
+    /// Runs one write under `plan`. `effect` performs it on the shared store, and `is_written`
+    /// tells whether its result means the write took effect.
+    ///
+    /// Returns an unknown outcome only for a write that may have taken effect; a lost response
+    /// of a write that did not take effect returns the store's own result.
+    async fn run_write_with_plan<T, F, Fut>(
+        &self,
+        plan: CallPlan,
+        operation: ObjectStoreOperation,
+        key: &str,
+        effect: F,
+        is_written: fn(&ObjectStoreResult<T>) -> bool,
+    ) -> ObjectStoreResult<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ObjectStoreResult<T>>,
+    {
+        tokio::time::sleep(plan.delay).await;
+        if self.is_cut_off() {
             // The request is on the wire: it may still land after the process died.
-            if is_write && plan.is_effect_applied {
+            if plan.is_effect_applied {
                 let landed = effect().await;
                 drop(landed);
             }
             return std::future::pending().await;
         }
-        let failure_kind = if is_write {
-            ObjectStoreErrorKind::OutcomeUnknown
-        } else {
-            ObjectStoreErrorKind::Transient
+        let Some(fault) = plan.fault else {
+            return effect().await;
         };
-        match plan.fault {
-            None | Some(InjectedFault::SlowResponse) => effect().await,
-            Some(InjectedFault::Throttled) => Err(injected_error(
-                operation,
-                key,
-                ObjectStoreErrorKind::Transient,
-                "injected HTTP 503 SlowDown",
-            )),
-            Some(InjectedFault::ConditionalRequestConflict) => Err(injected_error(
-                operation,
-                key,
-                ObjectStoreErrorKind::Transient,
-                "injected HTTP 409 ConditionalRequestConflict",
-            )),
-            Some(InjectedFault::ServerError | InjectedFault::Timeout) => {
-                if is_write && plan.is_effect_applied {
-                    let applied = effect().await;
-                    drop(applied);
-                }
+        match fault {
+            InjectedFault::SlowResponse => {
+                self.observe_fault(fault, FaultEffect::Delayed);
+                effect().await
+            }
+            InjectedFault::Throttled | InjectedFault::ConditionalRequestConflict => {
+                self.observe_fault(fault, FaultEffect::FailedBeforeEffect);
+                Err(rejection_before_effect(operation, key, fault))
+            }
+            InjectedFault::ServerError | InjectedFault::Timeout => {
+                let is_applied = plan.is_effect_applied && is_written(&effect().await);
+                let effect_kind = if is_applied {
+                    FaultEffect::WrittenOutcomeUnknown
+                } else {
+                    FaultEffect::NotWrittenOutcomeUnknown
+                };
+                self.observe_fault(fault, effect_kind);
                 Err(injected_error(
                     operation,
                     key,
-                    failure_kind,
+                    ObjectStoreErrorKind::OutcomeUnknown,
                     "injected HTTP 500 or client timeout",
                 ))
             }
-            Some(InjectedFault::ResponseLost) => {
-                let applied = effect().await;
-                drop(applied);
+            InjectedFault::ResponseLost => {
+                let outcome = effect().await;
+                if !is_written(&outcome) {
+                    return outcome;
+                }
+                self.observe_fault(fault, FaultEffect::WrittenOutcomeUnknown);
                 Err(injected_error(
                     operation,
                     key,
-                    failure_kind,
+                    ObjectStoreErrorKind::OutcomeUnknown,
                     "injected lost response",
                 ))
             }
         }
     }
+}
+
+/// The transient error of a fault that fails a call before it reaches storage.
+fn rejection_before_effect(
+    operation: ObjectStoreOperation,
+    key: &str,
+    fault: InjectedFault,
+) -> ObjectStoreError {
+    let detail = match fault {
+        InjectedFault::Throttled => "injected HTTP 503 SlowDown",
+        InjectedFault::ConditionalRequestConflict => "injected HTTP 409 ConditionalRequestConflict",
+        _ => "injected HTTP 500 or client timeout",
+    };
+    injected_error(operation, key, ObjectStoreErrorKind::Transient, detail)
+}
+
+fn is_put_written(outcome: &ObjectStoreResult<WriteOutcome>) -> bool {
+    matches!(outcome, Ok(WriteOutcome::Written { .. }))
+}
+
+fn is_delete_done(outcome: &ObjectStoreResult<()>) -> bool {
+    outcome.is_ok()
 }
 
 /// The first segment of an object key: `log`, `lease`, `manifest`, `snapshot`, and so on.
@@ -295,9 +403,12 @@ impl ObjectStore for NodeObjectStore {
         condition: WriteCondition,
     ) -> ObjectStoreResult<WriteOutcome> {
         let outcome = self
-            .run_call(ObjectStoreOperation::Put, key, true, || {
-                self.shared.put(key, body, condition)
-            })
+            .run_write(
+                ObjectStoreOperation::Put,
+                key,
+                || self.shared.put(key, body, condition),
+                is_put_written,
+            )
             .await;
         if let Ok(WriteOutcome::PreconditionFailed) = outcome {
             self.observe(|observations| {
@@ -338,10 +449,8 @@ impl ObjectStore for NodeObjectStore {
                     .or_default() += 1;
             });
         }
-        self.run_call(ObjectStoreOperation::Get, key, false, || {
-            self.shared.get(key)
-        })
-        .await
+        self.run_read(ObjectStoreOperation::Get, key, || self.shared.get(key))
+            .await
     }
 
     async fn get_range(
@@ -349,7 +458,7 @@ impl ObjectStore for NodeObjectStore {
         key: &str,
         range: ByteRange,
     ) -> ObjectStoreResult<Option<ObjectContent>> {
-        self.run_call(ObjectStoreOperation::Get, key, false, || {
+        self.run_read(ObjectStoreOperation::Get, key, || {
             self.shared.get_range(key, range)
         })
         .await
@@ -376,16 +485,17 @@ impl ObjectStore for NodeObjectStore {
     }
 
     async fn head(&self, key: &str) -> ObjectStoreResult<Option<ObjectMetadata>> {
-        self.run_call(ObjectStoreOperation::Head, key, false, || {
-            self.shared.head(key)
-        })
-        .await
+        self.run_read(ObjectStoreOperation::Head, key, || self.shared.head(key))
+            .await
     }
 
     async fn delete(&self, key: &str) -> ObjectStoreResult<()> {
-        self.run_call(ObjectStoreOperation::Delete, key, true, || {
-            self.shared.delete(key)
-        })
+        self.run_write(
+            ObjectStoreOperation::Delete,
+            key,
+            || self.shared.delete(key),
+            is_delete_done,
+        )
         .await?;
         self.observe(|observations| {
             *observations
@@ -398,9 +508,12 @@ impl ObjectStore for NodeObjectStore {
 
     async fn delete_many(&self, keys: &[String]) -> ObjectStoreResult<()> {
         let first_key = keys.first().map_or("", String::as_str);
-        self.run_call(ObjectStoreOperation::Delete, first_key, true, || {
-            self.shared.delete_many(keys)
-        })
+        self.run_write(
+            ObjectStoreOperation::Delete,
+            first_key,
+            || self.shared.delete_many(keys),
+            is_delete_done,
+        )
         .await?;
         self.observe(|observations| {
             for key in keys {
@@ -419,9 +532,160 @@ impl ObjectStore for NodeObjectStore {
         start_after: Option<&str>,
         max_keys: u32,
     ) -> ObjectStoreResult<ObjectListing> {
-        self.run_call(ObjectStoreOperation::List, prefix, false, || {
+        self.run_read(ObjectStoreOperation::List, prefix, || {
             self.shared.list(prefix, start_after, max_keys)
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use dexzd_object_store::{
+        InMemoryObjectStore, ObjectStore, ObjectStoreErrorKind, ObjectStoreOperation,
+        WriteCondition, WriteOutcome,
+    };
+
+    use super::{
+        CallPlan, FaultEffect, InjectedFault, NodeObjectStore, StorageObservations, is_put_written,
+    };
+    use crate::engine_simulation::event_trace::EventTrace;
+
+    const KEY: &str = "log/node-a/0000000001/00000000000000000001";
+
+    /// Runs `test` on a paused current-thread runtime with a layer over an empty shared store.
+    fn with_layer(test: impl AsyncFnOnce(&NodeObjectStore, &InMemoryObjectStore)) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("a current-thread runtime with paused time builds")
+            .block_on(async {
+                let shared = Arc::new(InMemoryObjectStore::new());
+                let layer = NodeObjectStore::new(
+                    Arc::clone(&shared),
+                    "p1".to_owned(),
+                    "first".to_owned(),
+                    0,
+                    Arc::new(EventTrace::new(tokio::time::Instant::now())),
+                    Arc::new(Mutex::new(StorageObservations::default())),
+                );
+                test(&layer, &shared).await;
+            });
+    }
+
+    fn plan(fault: InjectedFault, is_effect_applied: bool) -> CallPlan {
+        CallPlan {
+            fault: Some(fault),
+            delay: Duration::from_millis(5),
+            is_effect_applied,
+        }
+    }
+
+    async fn put_with_plan(
+        layer: &NodeObjectStore,
+        shared: &InMemoryObjectStore,
+        plan: CallPlan,
+        body: &'static [u8],
+    ) -> dexzd_object_store::ObjectStoreResult<WriteOutcome> {
+        layer
+            .run_write_with_plan(
+                plan,
+                ObjectStoreOperation::Put,
+                KEY,
+                || shared.put(KEY, Bytes::from_static(body), WriteCondition::CreateOnly),
+                is_put_written,
+            )
+            .await
+    }
+
+    fn observed(layer: &NodeObjectStore) -> Vec<(InjectedFault, FaultEffect)> {
+        layer
+            .observations
+            .lock()
+            .expect("storage observation lock is not poisoned")
+            .injected_faults
+            .keys()
+            .copied()
+            .collect()
+    }
+
+    #[test]
+    fn a_lost_response_of_a_failed_precondition_returns_the_failure() {
+        with_layer(async |layer, shared| {
+            let first = shared
+                .put(
+                    KEY,
+                    Bytes::from_static(b"first"),
+                    WriteCondition::CreateOnly,
+                )
+                .await;
+            assert!(matches!(first, Ok(WriteOutcome::Written { .. })));
+            let outcome = put_with_plan(
+                layer,
+                shared,
+                plan(InjectedFault::ResponseLost, true),
+                b"second",
+            )
+            .await;
+            assert!(matches!(outcome, Ok(WriteOutcome::PreconditionFailed)));
+            assert!(observed(layer).is_empty());
+        });
+    }
+
+    #[test]
+    fn a_lost_response_of_a_write_is_an_unknown_outcome() {
+        with_layer(async |layer, shared| {
+            let outcome = put_with_plan(
+                layer,
+                shared,
+                plan(InjectedFault::ResponseLost, true),
+                b"only",
+            )
+            .await;
+            let error = outcome.expect_err("the response was lost");
+            assert_eq!(error.kind, ObjectStoreErrorKind::OutcomeUnknown);
+            let stored = shared.get(KEY).await.expect("the shared store reads");
+            assert_eq!(
+                stored.map(|object| object.bytes),
+                Some(Bytes::from_static(b"only"))
+            );
+            assert_eq!(
+                observed(layer),
+                vec![(
+                    InjectedFault::ResponseLost,
+                    FaultEffect::WrittenOutcomeUnknown
+                )]
+            );
+        });
+    }
+
+    #[test]
+    fn a_timed_out_failed_precondition_is_labelled_not_written() {
+        with_layer(async |layer, shared| {
+            let first = shared
+                .put(
+                    KEY,
+                    Bytes::from_static(b"first"),
+                    WriteCondition::CreateOnly,
+                )
+                .await;
+            assert!(matches!(first, Ok(WriteOutcome::Written { .. })));
+            let outcome =
+                put_with_plan(layer, shared, plan(InjectedFault::Timeout, true), b"second").await;
+            let error = outcome.expect_err("the client timed out");
+            assert_eq!(error.kind, ObjectStoreErrorKind::OutcomeUnknown);
+            assert_eq!(
+                observed(layer),
+                vec![(
+                    InjectedFault::Timeout,
+                    FaultEffect::NotWrittenOutcomeUnknown
+                )]
+            );
+        });
     }
 }

@@ -74,7 +74,8 @@ pub struct EngineSimulationSummary {
     pub start_failures: BTreeMap<String, u64>,
     /// Wall-clock jumps of a process.
     pub clock_jumps: u64,
-    /// Object storage faults injected, by kind.
+    /// Object storage faults injected, by kind and what they did, such as
+    /// `ResponseLost/WrittenOutcomeUnknown`.
     pub injected_faults: BTreeMap<String, u64>,
     /// Worker dispatches and RPCs, by behavior.
     pub worker_behaviors: BTreeMap<String, u64>,

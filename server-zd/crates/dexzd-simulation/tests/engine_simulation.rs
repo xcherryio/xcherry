@@ -74,12 +74,16 @@ fn assert_covered(total: &EngineSimulationSummary) {
         );
     }
     for fault in [
-        "SlowResponse",
-        "ServerError",
-        "Throttled",
-        "ConditionalRequestConflict",
-        "Timeout",
-        "ResponseLost",
+        "SlowResponse/Delayed",
+        "ServerError/WrittenOutcomeUnknown",
+        "ServerError/NotWrittenOutcomeUnknown",
+        "ServerError/FailedBeforeEffect",
+        "Throttled/FailedBeforeEffect",
+        "ConditionalRequestConflict/FailedBeforeEffect",
+        "Timeout/WrittenOutcomeUnknown",
+        "Timeout/NotWrittenOutcomeUnknown",
+        "ResponseLost/WrittenOutcomeUnknown",
+        "ResponseLost/ReadDiscarded",
     ] {
         assert!(
             count(&total.injected_faults, fault) > 0,

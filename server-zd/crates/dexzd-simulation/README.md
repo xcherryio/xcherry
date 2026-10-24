@@ -31,7 +31,8 @@ runtime with paused time, and every choice derives from one seed.
 - **Object storage.** One shared `InMemoryObjectStore` has S3 conditional-write semantics. Each
   node process sees it through its own seeded fault layer. The layer injects slow responses,
   HTTP 5xx and 503, 409 conflicts, timeouts, and lost responses. A failed or timed-out write may
-  still take effect. Old-epoch processes produce real 412 races.
+  still take effect. A lost response hides only a write that took effect; a write that failed,
+  such as a 412, returns its own result. Old-epoch processes produce real 412 races.
 - **Processes.** A crash first cuts the process off from storage; writes already on the wire may
   still land. The successor's local store is kept, lost (restored from the newest snapshot), or
   rolled back to an earlier copy. Some successors take over while the old-epoch process still
@@ -67,7 +68,8 @@ The log itself is checked too. Copies of one log position must hold the same com
 partition never applies a new frame below one it already applied.
 
 The fixed seed set also asserts that these checks had something to check. It requires every
-fault kind, restart mode, and Worker behavior, and crashes during recovery. It also requires
+fault kind with each effect it can have on a call, such as a timed-out write that did or did
+not take effect. It requires every restart mode and Worker behavior, and crashes during recovery. It also requires
 412 races on log and lease objects, and frames that old-epoch processes applied after their
 successor started. Log cleanup deletions, snapshot restores during starts, and rejected
 duplicate results are required too. So are running attempts compared after the quiet crash,
