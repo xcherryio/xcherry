@@ -21,9 +21,9 @@ compilation and shrinking. The same budget applies to every active patch.
 | Patch | Deliberate defect | Expected detector | Status |
 | --- | --- | --- | --- |
 | `wall-clock.patch` | Apply uses the process wall clock instead of the command timestamp. | `A2-apply-twice` compares byte-identical writes. | Caught at seed `1592590336`, command 0. |
-| `hash-map-iteration.patch` | Attempt snapshots emit Attributes in `HashMap` iteration order. | `A2-apply-twice` or `A2-apply-redecoded` compares byte-identical writes. | Caught at seed `1592590336`, command 17. |
-| `immediate-reclaim.patch` | After the last slot holder leaves, R6 records that death point while an attempt snapshot still pins the value. It deletes the value when the final pin leaves after that death point reaches window floor W; otherwise it queues G at the old death point. | `I1-window-value-reference` must catch a retained point whose in-flight snapshot needs the deleted value. | PR #839's latest head catches this at seed `1592590336`, command 107; this branch depends on #839 merging. The targeted `snapshot_pin_survives_window_advance_and_collects_after_attempt_completion` integration test also fails on the mutant and passes without it. |
-| `retry-stale-snapshot.patch` | A retry reconstructs its prior Running snapshot and selects it when the next attempt starts; table-value pins move to the new attempt. | `S5-fresh-snapshot` must catch stale data after an intervening write. | Caught at seed `1592590336`, command 77, after a Channel message deletion changed the selected Channel info. |
+| `hash-map-iteration.patch` | Attempt snapshots emit Attributes in `HashMap` iteration order. | `A2-apply-twice` or `A2-apply-redecoded` compares byte-identical writes. | Caught at seed `1592590336`, command 30. |
+| `immediate-reclaim.patch` | After the last slot holder leaves, R6 records that death point while an attempt snapshot still pins the value. It deletes the value when the final pin leaves after that death point reaches window floor W; otherwise it queues G at the old death point. | `I1-window-value-reference` must catch a retained point whose in-flight snapshot needs the deleted value. | Caught at seed `1592590336`, command 107 (the retained-window invariant merged in #839). The targeted `snapshot_pin_survives_window_advance_and_collects_after_attempt_completion` integration test also fails on the mutant and passes without it. |
+| `retry-stale-snapshot.patch` | A retry reconstructs its prior Running snapshot and selects it when the next attempt starts; table-value pins move to the new attempt. | `S5-fresh-snapshot` must catch stale data after an intervening write. | Caught at seed `1592590336`, command 125, after a Channel message deletion changed the selected Channel info. |
 
 The immediate-reclaim patch is the original R6 failure mode. The apply model
 needs an attempt snapshot pinned across a slot overwrite and window advance,
@@ -39,6 +39,5 @@ budget when the engine simulation reaches main.
 | `skip-epoch-check.patch` | Closed-stream recovery replays batches from an older epoch after a new owner starts. | Recovered state must exclude commands voided by the epoch transition. |
 | `speculative-read-leak.patch` | GetAttributes reads the speculative overlay. | A client read must see only committed state, including before and after a failed commit. |
 
-The nightly workflow runs `script/server-zd-seeded-bugs.sh` in its own job.
-Until #839 merges, the R6 mutant remains an acceptance gap on this branch and
-fails the nightly job.
+The nightly workflow runs `script/server-zd-seeded-bugs.sh` in its own job. A
+mutant that the simulation does not catch fails that job.
