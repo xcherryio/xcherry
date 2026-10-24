@@ -19,6 +19,8 @@ localStorage:
   # Compacts the store in the background after startup replays this many log record bytes.
   compactAfterReplayBytes: 16777216
 commit:
+  # null enables the build default: true in debug builds, false in release builds.
+  debugReplayChecks: null
   batchWindow: 20ms
   maxInFlight: 4
   sealAtBytes: 4194304

@@ -267,19 +267,20 @@ impl FlowRuntimeRegistry {
         }
         // Commands this registry never proposed are replays; partition rebuild owns their effects.
         if let Some(speculative) = speculative {
-            if !is_same_outcome(&speculative, outcome) {
-                self.halt(format!(
-                    "speculative and committed outcomes differ for Flow {}",
-                    flow.flow_id
-                ));
-                return;
-            }
             if let Err(mismatch) = self.inner.dependencies.committer.check_speculative_outcome(
                 committed.context.partition,
+                &committed.command,
                 &speculative,
                 &committed.committed,
             ) {
                 self.halt(mismatch.to_string());
+                return;
+            }
+            if !is_same_outcome(&speculative, outcome) {
+                self.halt(format!(
+                    "speculative and committed outcomes differ for Flow {} command {:?}",
+                    flow.flow_id, committed.command.command_id
+                ));
                 return;
             }
             self.inner

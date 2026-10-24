@@ -6,16 +6,23 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
+use dexzd_apply::diagnostics::{current_semantic_point_hash, time_travel_target_hash};
 use dexzd_apply::{ApplyContext, ApplyOutcome};
-use dexzd_keyspace::{PartitionHasher, PartitionId, TenantId};
-use dexzd_protocol::dexzd::v1::{FlowCommand, LogPosition, LogRecord, PartitionMeta, log_record};
-use dexzd_storage::{LocalReadView, LocalStore};
+use dexzd_keyspace::{
+    ColumnFamily, PartitionHasher, PartitionId, RunId, RunTable, TenantId, parse_run_key,
+};
+use dexzd_protocol::dexzd::v1::{
+    FlowCommand, HistoryRecord, LogPosition, LogRecord, PartitionMeta, command_reply,
+    flow_command::Command, log_record,
+};
+use dexzd_storage::{LocalReadView, LocalStore, ScanDirection, StorageError};
 use prost::Message;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -25,11 +32,11 @@ use crate::command_applier::CommandApplier;
 use crate::commit::commit_state::{
     CommitState, NodeStopReason, PendingCommand, partition_stopped_error,
 };
-use crate::commit::replay_checks::compare_repeated_apply;
+use crate::commit::replay_checks::{compare_repeated_apply, compare_semantic_point_hash};
 use crate::commit::staged_state_reader::StagedStateReader;
 use crate::commit::{CommitProgress, EngineLocalStore};
 use crate::recovery::CommittedCommandSink;
-use crate::runtime::{CommittedCommand, CommittedFlowCommand};
+use crate::runtime::{CommitError, CommittedCommand, CommittedFlowCommand};
 
 /// The records of one partition in one committed log batch.
 pub(crate) struct PartitionFrame {
@@ -51,6 +58,7 @@ enum LaneWork {
 
 /// Applies committed partition frames on lanes; partition `p` always uses lane `p % lanes`.
 pub(crate) struct PartitionApplierPool {
+    frame_applier: Arc<FrameApplier>,
     lanes: Vec<mpsc::Sender<LaneWork>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     cancellation: CancellationToken,
@@ -63,6 +71,10 @@ pub(crate) struct FrameApplier {
     pub(crate) state: Arc<CommitState>,
     pub(crate) committed_commands: Arc<dyn CommittedCommandSink>,
     pub(crate) is_checking_replay: bool,
+    pub(crate) semantic_point_hashes: Mutex<BTreeMap<(RunId, u32, u64), [u8; 16]>>,
+    pub(crate) pre_replay_semantic_points: BTreeSet<(RunId, u32, u64)>,
+    pub(crate) verified_time_travels: AtomicU64,
+    pub(crate) unverifiable_time_travels: AtomicU64,
 }
 
 impl PartitionApplierPool {
@@ -91,6 +103,7 @@ impl PartitionApplierPool {
             tasks.push(lane_task);
         }
         Self {
+            frame_applier,
             lanes,
             tasks: Mutex::new(tasks),
             cancellation,
@@ -140,6 +153,17 @@ impl PartitionApplierPool {
                 tracing::error!(error = %error, "partition applier lane failed");
             }
         }
+    }
+
+    pub(crate) fn time_travel_verification_counts(&self) -> (u64, u64) {
+        (
+            self.frame_applier
+                .verified_time_travels
+                .load(Ordering::Relaxed),
+            self.frame_applier
+                .unverifiable_time_travels
+                .load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -326,10 +350,47 @@ enum FrameFailure {
 }
 
 impl FrameApplier {
+    pub(crate) fn pre_replay_semantic_points(
+        store: &dyn LocalReadView,
+    ) -> Result<BTreeSet<(RunId, u32, u64)>, StorageError> {
+        let mut points = BTreeSet::new();
+        let mut start = None;
+        loop {
+            let rows = store.scan(
+                ColumnFamily::History,
+                start.as_deref(),
+                None,
+                ScanDirection::Forward,
+                256,
+            )?;
+            if rows.is_empty() {
+                break;
+            }
+            for (key, value) in &rows {
+                let parsed = parse_run_key(key)
+                    .map_err(|error| StorageError::Invalid(format!("history key: {error}")))?;
+                if parsed.table == RunTable::HistoryRecord {
+                    let history = HistoryRecord::decode(value.as_slice())?;
+                    if history.is_semantic {
+                        points.insert((parsed.run_id, history.attempt, history.seq));
+                    }
+                }
+            }
+            let mut next = rows
+                .last()
+                .expect("a nonempty page has a last key")
+                .0
+                .clone();
+            next.push(0);
+            start = Some(next);
+        }
+        Ok(points)
+    }
+
     fn apply_frame(&self, frame: PartitionFrame) {
         let partition = frame.partition;
         if self.state.is_partition_halted(partition) {
-            self.reject_frame(&frame);
+            self.reject_frame(&frame, None);
             return;
         }
         match self.try_apply_frame(&frame) {
@@ -338,7 +399,7 @@ impl FrameApplier {
             Err(FrameFailure::Halt(detail)) => {
                 tracing::error!(partition = partition.0, seq = frame.position.seq, detail = %detail, "partition stopped applying commands");
                 self.state.halt_partition(partition);
-                self.reject_frame(&frame);
+                self.reject_frame(&frame, Some(&detail));
             }
             Err(FrameFailure::StoreFailed(detail)) => {
                 self.state.stop(NodeStopReason::LocalStoreFailed { detail });
@@ -376,8 +437,19 @@ impl FrameApplier {
         let mut last_command_timestamp_micros = meta.last_command_timestamp_micros;
         let mut last_behavior_version = meta.last_behavior_version;
         for DecodedCommand { command, context } in commands {
-            let outcome = self.apply_command(&context, &reader, &command)?;
+            let outcome = self.apply_command(&context, &reader, &command, &frame.position)?;
+            if self.is_checking_replay
+                && matches!(
+                    &outcome.reply.reply,
+                    Some(command_reply::Reply::TimeTravel(_))
+                )
+            {
+                self.check_time_travel_target(&context, &reader, &command, &frame.position)?;
+            }
             reader.stage(&outcome.writes);
+            if self.is_checking_replay {
+                self.record_semantic_point(&context, &reader, &outcome, &command)?;
+            }
             last_command_timestamp_micros =
                 last_command_timestamp_micros.max(command.proposed_at_micros);
             last_behavior_version = command.behavior_version;
@@ -502,14 +574,116 @@ impl FrameApplier {
         context: &ApplyContext,
         reader: &StagedStateReader<'_>,
         command: &FlowCommand,
+        position: &LogPosition,
     ) -> Result<ApplyOutcome, FrameFailure> {
         let outcome = self.apply_catching_panics(context, reader, command)?;
         if self.is_checking_replay {
             let repeated = self.apply_catching_panics(context, reader, command)?;
-            compare_repeated_apply(&outcome, &repeated)
+            compare_repeated_apply(command, context.partition, position, &outcome, &repeated)
                 .map_err(|mismatch| FrameFailure::Halt(mismatch.to_string()))?;
         }
         Ok(outcome)
+    }
+
+    fn check_time_travel_target(
+        &self,
+        context: &ApplyContext,
+        reader: &StagedStateReader<'_>,
+        command: &FlowCommand,
+        position: &LogPosition,
+    ) -> Result<(), FrameFailure> {
+        let target = time_travel_target_hash(context, reader, command).map_err(|error| {
+            FrameFailure::Halt(format!(
+                "time-travel diagnostic for Flow {} at seq {} failed: {error}",
+                command.flow_id, position.seq
+            ))
+        })?;
+        let Some(target) = target else {
+            return Ok(());
+        };
+        let hashes = self
+            .semantic_point_hashes
+            .lock()
+            .expect("semantic point hash lock is not poisoned");
+        let key = (target.run_id, target.run_attempt, target.run_seq);
+        if let Some(expected) = hashes.get(&key) {
+            compare_semantic_point_hash(expected, &target, command, position)
+                .map_err(FrameFailure::Halt)?;
+            self.verified_time_travels.fetch_add(1, Ordering::Relaxed);
+        } else if self.pre_replay_semantic_points.contains(&key) {
+            let unverifiable_count = self
+                .unverifiable_time_travels
+                .fetch_add(1, Ordering::Relaxed)
+                + 1;
+            tracing::debug!(
+                flow_id = %command.flow_id,
+                log_seq = position.seq,
+                run_id = %target.run_id,
+                run_attempt = target.run_attempt,
+                run_seq = target.run_seq,
+                unverifiable_count,
+                "time-travel target predates replay and has no independent hash"
+            );
+        } else {
+            return Err(FrameFailure::Halt(format!(
+                "time-travel verification has no expected hash for Flow {} command {:?} at log seq {} semantic key ({}, {}, {})",
+                command.flow_id,
+                command.command_id,
+                position.seq,
+                target.run_id,
+                target.run_attempt,
+                target.run_seq
+            )));
+        }
+        Ok(())
+    }
+
+    fn record_semantic_point(
+        &self,
+        context: &ApplyContext,
+        reader: &StagedStateReader<'_>,
+        outcome: &ApplyOutcome,
+        command: &FlowCommand,
+    ) -> Result<(), FrameFailure> {
+        if !outcome.writes.is_empty() && matches!(&command.command, Some(Command::RunPurge(_))) {
+            let run_id = RunId::from_slice(&command.run_id).map_err(|error| {
+                FrameFailure::Halt(format!(
+                    "RunPurge command {:?} has invalid run ID: {error}",
+                    command.command_id
+                ))
+            })?;
+            self.semantic_point_hashes
+                .lock()
+                .expect("semantic point hash lock is not poisoned")
+                .retain(|(stored_run_id, _, _), _| *stored_run_id != run_id);
+            return Ok(());
+        }
+        let Some(run_id) = outcome.run_id else {
+            return Ok(());
+        };
+        let point = current_semantic_point_hash(context, reader, run_id, &command.command_id)
+            .map_err(|error| {
+                FrameFailure::Halt(format!(
+                    "semantic-point diagnostic for Flow {} command {:?} failed: {error}",
+                    command.flow_id, command.command_id
+                ))
+            })?;
+        if let Some(point) = point {
+            let mut hashes = self
+                .semantic_point_hashes
+                .lock()
+                .expect("semantic point hash lock is not poisoned");
+            hashes.retain(|(run_id, _, run_seq), _| {
+                *run_id != point.run_id
+                    || *run_seq >= point.window_start_seq
+                    || *run_seq == point.genesis_seq
+            });
+            hashes.insert(
+                (point.run_id, point.run_attempt, point.run_seq),
+                point.state_hash,
+            );
+        }
+        Ok(())
     }
 
     fn apply_catching_panics(
@@ -564,7 +738,7 @@ impl FrameApplier {
         }
     }
 
-    fn reject_frame(&self, frame: &PartitionFrame) {
+    fn reject_frame(&self, frame: &PartitionFrame, detail: Option<&str>) {
         for record in &frame.records {
             let Ok(LogRecord {
                 body: Some(log_record::Body::Flow(command)),
@@ -574,9 +748,16 @@ impl FrameApplier {
                 continue;
             };
             if let Some(pending) = self.state.take(&command.command_id) {
-                pending
-                    .responder
-                    .resolve(Err(partition_stopped_error(frame.partition)));
+                let error = detail.map_or_else(
+                    || partition_stopped_error(frame.partition),
+                    |detail| CommitError::Unavailable {
+                        detail: format!(
+                            "partition {} stopped applying commands: {detail}",
+                            frame.partition.0
+                        ),
+                    },
+                );
+                pending.responder.resolve(Err(error));
             }
         }
     }

@@ -46,6 +46,28 @@ impl CommittedStateView {
     }
 }
 
+impl LocalReadView for CommittedStateView {
+    fn get(
+        &self,
+        column_family: ColumnFamily,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.read_view().get(column_family, key)
+    }
+
+    fn scan(
+        &self,
+        column_family: ColumnFamily,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+        direction: ScanDirection,
+        limit: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        self.read_view()
+            .scan(column_family, start, end, direction, limit)
+    }
+}
+
 impl FlowStateReader for CommittedStateView {
     fn get(
         &self,
