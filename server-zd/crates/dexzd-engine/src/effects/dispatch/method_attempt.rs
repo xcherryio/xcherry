@@ -14,6 +14,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::row_keys::hard_delete_current_key;
 use dexzd_keyspace::{ColumnFamily, TenantId};
 use dexzd_protocol::dex::{
@@ -34,7 +35,7 @@ use crate::effects::dispatch::MethodDispatchRequest;
 use crate::effects::dispatch::worker_result::{
     MethodResult, WorkerResultCheck, check_worker_result,
 };
-use crate::effects::hard_delete_objects::HardDeleteObjectOwner;
+use crate::effects::hard_delete_objects::{HardDeleteObjectOwner, HardDeleteUploads};
 use crate::effects::method_request::{
     MethodAttemptKey, MethodAttemptState, MethodRequest, build_method_request,
     heartbeat_checkpoint_value, read_method_attempt_state, resolve_method_durability,
@@ -70,6 +71,13 @@ enum AttemptEnd {
 enum PreparedRequest {
     Ready(Box<MethodRequest>),
     Ended(AttemptEnd),
+}
+
+/// Outcome of work raced against the method deadline and cancellation.
+enum BeforeDeadline<T> {
+    Done(T),
+    Canceled,
+    TimedOut,
 }
 
 struct AttemptFailure {
@@ -120,24 +128,16 @@ impl MethodAttempt {
     async fn run_attempt(&self) -> Result<(), EffectError> {
         // The owner-memory method timeout covers preparation, so slow state or object reads count.
         let method_deadline = MethodDeadline::start(self.method_timeout_seconds);
-        let state = tokio::select! {
-            () = self.cancel.cancelled() => return Ok(()),
-            () = sleep_until(method_deadline.expires_at) => {
+        let read = self.retry_transient(|| self.read_attempt_state());
+        let state = match self.before_method_deadline(&method_deadline, read).await {
+            BeforeDeadline::Canceled => return Ok(()),
+            BeforeDeadline::TimedOut => {
                 // Without state, the failure carries no sticky Worker and commits promptly.
                 self.propose_failure(method_deadline.timeout_failure(), "", CommitUrgency::Prompt)
                     .await;
                 return Ok(());
             }
-            state = self.retry_transient(|| async {
-                let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
-                read_method_attempt_state(
-                    reader.as_ref(),
-                    self.run,
-                    &self.key,
-                    &self.task_id,
-                    self.context.config.hydrate_before_dispatch,
-                )
-            }) => state?,
+            BeforeDeadline::Done(state) => state?,
         };
         let Some(state) = state else {
             tracing::debug!(run_id = %self.key.run_id, "method attempt is no longer running");
@@ -167,7 +167,87 @@ impl MethodAttempt {
                 Ok(())
             }
             AttemptEnd::Result(frame, app_worker_id) => {
-                self.complete(&state, *frame, app_worker_id, urgency).await
+                self.complete(&state, *frame, app_worker_id, &timeouts.method, urgency)
+                    .await
+            }
+        }
+    }
+
+    /// Runs `operation` until the method deadline or cancellation, giving the deadline priority.
+    ///
+    /// Returns `TimedOut` once the deadline has expired, even when `operation` finished in the
+    /// same poll or before the deadline timer fired; returns `Canceled` when the attempt was
+    /// canceled first; otherwise returns the operation's output.
+    async fn before_method_deadline<T>(
+        &self,
+        deadline: &MethodDeadline,
+        operation: impl Future<Output = T>,
+    ) -> BeforeDeadline<T> {
+        tokio::select! {
+            biased;
+            () = sleep_until(deadline.expires_at) => BeforeDeadline::TimedOut,
+            () = self.cancel.cancelled() => BeforeDeadline::Canceled,
+            output = operation => {
+                if deadline.has_expired() {
+                    BeforeDeadline::TimedOut
+                } else {
+                    BeforeDeadline::Done(output)
+                }
+            }
+        }
+    }
+
+    /// Reads the attempt's state with the store reads on a blocking thread, so that a stalled
+    /// read cannot hold off the method deadline. Opening the snapshot view does no I/O.
+    ///
+    /// Returns the state, `None` when the attempt is no longer running with this dispatch ID,
+    /// or the read's error.
+    async fn read_attempt_state(&self) -> Result<Option<MethodAttemptState>, EffectError> {
+        let run = self.run;
+        let key = self.key.clone();
+        let task_id = self.task_id.clone();
+        let is_hydrating = self.context.config.hydrate_before_dispatch;
+        self.read_off_task(true, move |reader| {
+            read_method_attempt_state(reader, run, &key, &task_id, is_hydrating)
+        })
+        .await
+    }
+
+    /// Runs synchronous store reads on the blocking pool.
+    ///
+    /// Returns the read's result, or [`EffectError::Stopped`] when the runtime shut down before
+    /// the read ran. A panic in `read` resumes on this task.
+    async fn read_off_task<T: Send + 'static>(
+        &self,
+        include_speculative: bool,
+        read: impl FnOnce(&dyn FlowStateReader) -> Result<T, EffectError> + Send + 'static,
+    ) -> Result<T, EffectError> {
+        // The effect tracker owns the read and its slot until the store call returns.
+        let read_slot = Arc::clone(&self.context.blocking_read_slots)
+            .acquire_owned()
+            .await
+            .expect("the blocking read slots are never closed");
+        let reader = self
+            .context
+            .runtime
+            .flow_state_reader(&self.flow, include_speculative)?;
+        let read_cancel = self.cancel.child_token();
+        // When the attempt stops waiting, a read that has not started yet skips the store.
+        let _cancel_unstarted_read = read_cancel.clone().drop_guard();
+        // Dropping the handle at the deadline detaches the read; it ends with its store call.
+        let handle = self.context.tracker.spawn_blocking(move || {
+            let _read_slot = read_slot;
+            if read_cancel.is_cancelled() {
+                return Err(EffectError::Stopped);
+            }
+            read(reader.as_ref())
+        });
+        match handle.await {
+            Ok(result) => result,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => {
+                tracing::debug!(%error, run_id = %self.key.run_id, "state read did not run");
+                Err(EffectError::Stopped)
             }
         }
     }
@@ -180,12 +260,15 @@ impl MethodAttempt {
         state: &MethodAttemptState,
         timeouts: &AttemptTimeouts,
     ) -> Result<PreparedRequest, EffectError> {
-        let hard_delete_values = tokio::select! {
-            () = self.cancel.cancelled() => return Ok(PreparedRequest::Ended(AttemptEnd::Canceled)),
-            () = sleep_until(timeouts.method.expires_at) => {
-                return Ok(PreparedRequest::Ended(AttemptEnd::Failure(timeouts.method.timeout_failure())));
+        let read = self.retry_transient(|| self.read_hard_delete_values(state));
+        let hard_delete_values = match self.before_method_deadline(&timeouts.method, read).await {
+            BeforeDeadline::Canceled => return Ok(PreparedRequest::Ended(AttemptEnd::Canceled)),
+            BeforeDeadline::TimedOut => {
+                return Ok(PreparedRequest::Ended(AttemptEnd::Failure(
+                    timeouts.method.timeout_failure(),
+                )));
             }
-            values = self.retry_transient(|| self.read_hard_delete_values(state)) => values?,
+            BeforeDeadline::Done(values) => values?,
         };
         let request = build_method_request(state, &hard_delete_values)?;
         if request.encoded_len() > self.context.config.max_worker_request_bytes {
@@ -242,7 +325,7 @@ impl MethodAttempt {
                 values.insert(attribute_key, value);
                 continue;
             }
-            let current_object_id = self.current_hard_delete_object_id(&attribute_key)?;
+            let current_object_id = self.current_hard_delete_object_id(&attribute_key).await?;
             if let Some(object_id) = current_object_id.filter(|id| *id != object.object_id)
                 && let Some(value) = objects.read_value(owner, &object_id).await?
             {
@@ -252,17 +335,19 @@ impl MethodAttempt {
         Ok(values)
     }
 
-    fn current_hard_delete_object_id(
+    async fn current_hard_delete_object_id(
         &self,
         attribute_key: &str,
     ) -> Result<Option<String>, EffectError> {
         let key = hard_delete_current_key(self.run.flow_hash, self.run.run_id, attribute_key);
-        let reader = self.context.runtime.flow_state_reader(&self.flow, false)?;
-        let Some(bytes) = reader.get(ColumnFamily::Flow, &key)? else {
-            return Ok(None);
-        };
-        let record: HardDeleteObjectRecord = decode_row("HardDeleteObject", &key, &bytes)?;
-        Ok(record.object.map(|object| object.object_id))
+        self.read_off_task(false, move |reader| {
+            let Some(bytes) = reader.get(ColumnFamily::Flow, &key)? else {
+                return Ok(None);
+            };
+            let record: HardDeleteObjectRecord = decode_row("HardDeleteObject", &key, &bytes)?;
+            Ok(record.object.map(|object| object.object_id))
+        })
+        .await
     }
 
     fn object_owner(&self, state: &MethodAttemptState) -> HardDeleteObjectOwner {
@@ -279,7 +364,10 @@ impl MethodAttempt {
         request: MethodRequest,
         timeouts: &AttemptTimeouts,
     ) -> AttemptEnd {
-        let heartbeat_timeout = timeouts.heartbeat_timeout;
+        // Building the request takes time, and an expired attempt must not reach a Worker.
+        if timeouts.method.has_expired() {
+            return AttemptEnd::Failure(timeouts.method.timeout_failure());
+        }
         let method_deadline = timeouts.method.expires_at;
         let started = Instant::now();
         let remaining = method_deadline.saturating_duration_since(started);
@@ -317,27 +405,34 @@ impl MethodAttempt {
         loop {
             let flush_at = checkpoints.flush_at;
             tokio::select! {
-                () = self.cancel.cancelled() => {
-                    session.cancel();
-                    return AttemptEnd::Canceled;
-                }
+                biased;
                 () = sleep_until(method_deadline) => {
                     session.cancel();
                     return AttemptEnd::Failure(timeouts.method.timeout_failure());
                 }
                 () = sleep_until_optional(heartbeat_deadline) => {
                     session.cancel();
-                    return AttemptEnd::Failure(AttemptFailure::server(
-                        StepAttemptFailureKind::HeartbeatTimeout,
-                        format!("no heartbeat within {}s", heartbeat_timeout.as_secs()),
-                    ));
+                    return AttemptEnd::Failure(timeouts.heartbeat_timeout_failure());
+                }
+                () = self.cancel.cancelled() => {
+                    session.cancel();
+                    return AttemptEnd::Canceled;
                 }
                 () = sleep_until_optional(flush_at) => {
+                    if let Some(failure) = timeouts.expired_failure(heartbeat_deadline) {
+                        session.cancel();
+                        return AttemptEnd::Failure(failure);
+                    }
                     if let Some(checkpoint) = checkpoints.take_pending() {
                         self.propose_heartbeat(checkpoint).await;
                     }
                 }
                 event = session.next_event() => {
+                    // A timer fires up to a driver tick late; an event after its deadline loses.
+                    if let Some(failure) = timeouts.expired_failure(heartbeat_deadline) {
+                        session.cancel();
+                        return AttemptEnd::Failure(failure);
+                    }
                     match event {
                         None => {
                             return AttemptEnd::Failure(AttemptFailure::server(
@@ -346,11 +441,11 @@ impl MethodAttempt {
                             ));
                         }
                         Some(DispatchEvent::Assigned { .. }) => {
-                            heartbeat_deadline = Some(Instant::now() + heartbeat_timeout);
+                            heartbeat_deadline = Some(Instant::now() + timeouts.heartbeat_timeout);
                         }
                         Some(DispatchEvent::Unassigned) => heartbeat_deadline = None,
                         Some(DispatchEvent::Output(frame)) => {
-                            heartbeat_deadline = Some(Instant::now() + heartbeat_timeout);
+                            heartbeat_deadline = Some(Instant::now() + timeouts.heartbeat_timeout);
                             if let Some(change) = heartbeat_change(&frame) {
                                 checkpoints.observe(change, self.context.config.heartbeat_batch_window);
                             } else if let Some(write) = into_step_stream_write(frame) {
@@ -425,6 +520,7 @@ impl MethodAttempt {
         state: &MethodAttemptState,
         frame: PollWorkerTaskFrame,
         app_worker_id: String,
+        method_deadline: &MethodDeadline,
         urgency: CommitUrgency,
     ) -> Result<(), EffectError> {
         let sticky_app_worker_id = state.run_record.sticky_app_worker_id.clone();
@@ -469,6 +565,13 @@ impl MethodAttempt {
                 .await;
             match upload {
                 Ok(uploads) => break uploads,
+                Err(error) if error.is_retryable() && method_deadline.has_expired() => {
+                    tracing::warn!(%error, run_id = %self.key.run_id, "hard-delete uploads failed after the method deadline");
+                    let failure = method_deadline.timeout_failure();
+                    self.propose_failure(failure, &sticky_app_worker_id, urgency)
+                        .await;
+                    return Ok(());
+                }
                 Err(error) if error.is_retryable() => {
                     tracing::warn!(%error, run_id = %self.key.run_id, "retrying hard-delete uploads");
                     if !backoff.wait(&self.cancel).await {
@@ -478,6 +581,14 @@ impl MethodAttempt {
                 Err(error) => return Err(error),
             }
         };
+        // Like the Go Server's backends, a result whose processing ends after the deadline loses.
+        if method_deadline.has_expired() {
+            let failure = method_deadline.timeout_failure();
+            self.propose_failure(failure, &sticky_app_worker_id, urgency)
+                .await;
+            self.finish_result_uploads(uploads, false).await;
+            return Ok(());
+        }
         let command = self.flow_command(flow_command::Command::StepMethodCompleted(
             result.into_command(
                 self.key.invocation(),
@@ -495,10 +606,26 @@ impl MethodAttempt {
         let Some(reply) = reply else {
             return Ok(());
         };
-        self.context
+        self.finish_result_uploads(uploads, !reply.is_error()).await;
+        Ok(())
+    }
+
+    /// Finishes the uploads of the attempt's only proposal. A failure is logged because the ledger
+    /// keeps its records for recovery.
+    async fn finish_result_uploads(&self, uploads: HardDeleteUploads, is_committed: bool) {
+        if let Err(error) = self
+            .context
             .hard_delete_objects
-            .finish_uploads(uploads, !reply.is_error())
+            .finish_uploads(uploads, is_committed)
             .await
+        {
+            tracing::warn!(
+                %error,
+                run_id = %self.key.run_id,
+                attempt = self.key.attempt,
+                "finishing hard-delete uploads failed; recovery deletes unreferenced objects"
+            );
+        }
     }
 
     async fn propose_failure(
@@ -569,6 +696,24 @@ impl AttemptTimeouts {
             heartbeat_timeout,
         }
     }
+
+    /// Returns the failure of an expired method or heartbeat deadline, checked against the clock
+    /// rather than the timers; the method timeout comes first.
+    fn expired_failure(&self, heartbeat_deadline: Option<Instant>) -> Option<AttemptFailure> {
+        if self.method.has_expired() {
+            return Some(self.method.timeout_failure());
+        }
+        heartbeat_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+            .then(|| self.heartbeat_timeout_failure())
+    }
+
+    fn heartbeat_timeout_failure(&self) -> AttemptFailure {
+        AttemptFailure::server(
+            StepAttemptFailureKind::HeartbeatTimeout,
+            format!("no heartbeat within {}s", self.heartbeat_timeout.as_secs()),
+        )
+    }
 }
 
 /// The method timeout, started before the attempt's first state read.
@@ -587,6 +732,11 @@ impl MethodDeadline {
             method_timeout,
             expires_at: Instant::now() + method_timeout,
         }
+    }
+
+    /// Returns true once the method timeout has expired, even before its timer fires.
+    fn has_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
     }
 
     fn timeout_failure(&self) -> AttemptFailure {

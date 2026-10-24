@@ -36,10 +36,15 @@ final class HeartbeatTestWorkflow implements Flow<Void> {
     private final HeartbeatStep start = new HeartbeatStep();
     private final Scenario scenario;
     private final boolean isPullMode;
+    private final boolean isServerZD;
 
-    HeartbeatTestWorkflow(final Scenario scenario, final boolean isPullMode) {
+    HeartbeatTestWorkflow(
+            final Scenario scenario,
+            final boolean isPullMode,
+            final boolean isServerZD) {
         this.scenario = scenario;
         this.isPullMode = isPullMode;
+        this.isServerZD = isServerZD;
     }
 
     @Override
@@ -62,6 +67,15 @@ final class HeartbeatTestWorkflow implements Flow<Void> {
         public StepDecision execute(final Context context, final Void input) {
             if (scenario == Scenario.LOCAL_IGNORES_VALUE) {
                 if (context.getAttempt() <= 3) {
+                    // C2: server-zd persists ASYNC heartbeat checkpoints from the first attempt.
+                    if (isServerZD
+                            && context.getAttempt() > 1
+                            && (!context.hasLastHeartbeatValue()
+                                    || !"local-checkpoint".equals(
+                                            context.getLastHeartbeatValue(String.class)))) {
+                        throw new IllegalStateException(
+                                "server-zd did not restore the previous ASYNC heartbeat");
+                    }
                     context.recordHeartbeat("local-checkpoint");
                     progress.write(context, "local-attempt-" + context.getAttempt());
                     throw new IllegalStateException("retry local activity");

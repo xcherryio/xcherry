@@ -39,7 +39,7 @@ use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::StorageError;
 use dexzd_stream_store::StreamStore;
 use futures::future::BoxFuture;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -95,6 +95,12 @@ pub struct EffectsConfig {
     /// Default 30 seconds. Longest delay between retries of a transient failure; deliveries
     /// and deletions retry forever.
     pub retry_max_backoff: Duration,
+    /// Default 64. Most local store reads of method attempts that run on blocking threads at
+    /// once. A read keeps its slot until its store call returns, also after its attempt timed
+    /// out, so a stalled store cannot take every blocking thread. An attempt waits for a free
+    /// slot under its method timeout. Values below 1 count as 1; values above
+    /// `tokio::sync::Semaphore::MAX_PERMITS` count as that maximum.
+    pub max_blocking_state_reads: usize,
     /// Settings recorded into the child run that a delivered SubFlow start creates; apply never
     /// reads configuration. Set it to the runtime's run settings so that client and SubFlow
     /// starts record the same values. Defaults follow the `RunSettings` field documentation.
@@ -114,6 +120,7 @@ impl Default for EffectsConfig {
             locked_invocation_retry_interval: Duration::from_secs(1),
             retry_initial_backoff: Duration::from_millis(100),
             retry_max_backoff: Duration::from_secs(30),
+            max_blocking_state_reads: 64,
             child_run_settings: RunSettings {
                 history_window_semantic_events: 10_000,
                 history_prune_chunk_semantic_events: 1_000,
@@ -251,6 +258,9 @@ pub(crate) struct EffectContext {
     pub(crate) startup_pending_uploads: Result<Vec<PendingHardDeleteUpload>, String>,
     pub(crate) shutdown: CancellationToken,
     pub(crate) tracker: TaskTracker,
+    /// Permits for method attempt store reads on blocking threads; see
+    /// [`EffectsConfig::max_blocking_state_reads`].
+    pub(crate) blocking_read_slots: Arc<Semaphore>,
     router: mpsc::UnboundedSender<RouterMessage>,
 }
 
@@ -420,6 +430,11 @@ impl EffectTasks {
                 tracing::error!(%error, "reading pending hard-delete uploads failed");
                 error.to_string()
             });
+        let blocking_read_slots = Arc::new(Semaphore::new(
+            self.config
+                .max_blocking_state_reads
+                .clamp(1, Semaphore::MAX_PERMITS),
+        ));
         let context = Arc::new(EffectContext {
             config: self.config,
             runtime,
@@ -436,6 +451,7 @@ impl EffectTasks {
             startup_pending_uploads,
             shutdown: shutdown.clone(),
             tracker: tracker.clone(),
+            blocking_read_slots,
             router: self.router_sender,
         });
         let router = EffectRouter {

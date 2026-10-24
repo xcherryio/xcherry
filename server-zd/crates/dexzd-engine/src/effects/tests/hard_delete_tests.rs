@@ -6,25 +6,31 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use dexzd_keyspace::row_keys::{HARD_DELETE_PENDING_OBJECT, hard_delete_current_key};
 use dexzd_keyspace::{ColumnFamily, IndexKind, RunId, RunTable, run_table_prefix};
-use dexzd_object_store::ObjectStore;
+use dexzd_object_store::{FaultAction, ObjectStore, ObjectStoreOperation};
 use dexzd_protocol::dex::{
-    AttributeWrite, InvokeWaitForMethodResponse, SetAttributesRequest, Value,
+    AttributeWrite, InvokeWaitForMethodResponse, SetAttributesRequest, StepOptions, Value,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributesSetCommand, FlowCommand, HardDeleteObjectRecord, flow_command,
-    step_method_completed_command,
+    AttributesSetCommand, FlowCommand, HardDeleteObjectRecord, PendingHardDeleteUpload,
+    StepAttemptFailureKind, flow_command, step_method_completed_command,
 };
 use dexzd_storage::LocalReadView;
 use prost::Message;
 
 use super::{
-    EffectHarness, error_reply, is_error_reply, is_method_completed, ok_reply, settings,
-    start_request, string_value,
+    DurableState, EffectHarness, SwitchableFault, error_reply, is_attempt_failed, is_error_reply,
+    is_method_completed, ok_reply, settings, start_request, string_value,
 };
 use crate::effects::state_reads::decode_row;
-use crate::effects::{MethodRequest, decode_hard_delete_value, hard_delete_placeholder_value};
+use crate::effects::{
+    EffectError, EffectsConfig, HardDeleteUploadLedger, MethodRequest, NodeMetaUploadLedger,
+    decode_hard_delete_value, hard_delete_placeholder_value,
+};
 use crate::runtime::CommitUrgency;
 
 fn hard_delete_write(key: &str, value: Value) -> AttributeWrite {
@@ -438,5 +444,191 @@ async fn a_stalled_hard_delete_read_times_out_the_method_before_dispatch() {
         0,
         "the Worker never received the attempt"
     );
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_result_whose_uploads_end_after_the_method_deadline_fails_and_deletes_them() {
+    let (durable, object_fault) = super::SwitchableFault::install(
+        vec![dexzd_object_store::ObjectStoreOperation::Put],
+        dexzd_object_store::FaultAction::Delay(std::time::Duration::from_secs(10)),
+    );
+    let harness = EffectHarness::with_config(durable, crate::effects::EffectsConfig::default());
+    harness.rebuild_all_partitions().await;
+    let mut request = start_request("order-1");
+    request.step_options = Some(dexzd_protocol::dex::StepOptions {
+        wait_for_timeout_seconds: 5,
+        heartbeat_timeout_seconds: 600,
+        ..dexzd_protocol::dex::StepOptions::default()
+    });
+    let run_id = harness.start_flow(request, settings());
+    let wait_for = harness.dispatcher.next_dispatch().await;
+    object_fault.set_enabled(true);
+
+    // The result arrives in time, but its hard-delete upload ends after the deadline.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    wait_for.complete_wait_for(InvokeWaitForMethodResponse {
+        upsert_attributes: vec![hard_delete_write("secret", string_value("card-4242"))],
+        ..InvokeWaitForMethodResponse::default()
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    harness.settle().await;
+    assert!(
+        harness
+            .runtime
+            .commands_matching(is_method_completed)
+            .is_empty()
+    );
+    let failures = harness.runtime.commands_matching(super::is_attempt_failed);
+    let Some(flow_command::Command::StepAttemptFailed(failure)) = &failures[0].command.command
+    else {
+        panic!("expected a failure");
+    };
+    assert_eq!(failure.attempt, 1);
+    assert_eq!(
+        failure.kind,
+        dexzd_protocol::dexzd::v1::StepAttemptFailureKind::MethodTimeout as i32
+    );
+    let owner = harness
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("order-1"), run_id);
+    let listing = harness
+        .durable
+        .objects
+        .list(&owner.object_key_prefix(), None, 1000)
+        .await
+        .expect("list succeeds");
+    assert!(listing.objects.is_empty(), "the late upload is deleted");
+    assert_eq!(pending_upload_count(&harness), 0);
+    harness.shutdown().await;
+}
+
+/// Returns the failure kinds proposed for `attempt`.
+fn attempt_failure_kinds(harness: &EffectHarness, attempt: u32) -> Vec<i32> {
+    harness
+        .runtime
+        .commands_matching(is_attempt_failed)
+        .into_iter()
+        .filter_map(|recorded| match recorded.command.command {
+            Some(flow_command::Command::StepAttemptFailed(failure))
+                if failure.attempt == attempt =>
+            {
+                Some(failure.kind)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_late_upload_whose_deletion_fails_proposes_only_the_method_timeout() {
+    let (durable, object_fault) = SwitchableFault::install_actions(
+        "",
+        vec![
+            (
+                ObjectStoreOperation::Put,
+                FaultAction::Delay(Duration::from_secs(10)),
+            ),
+            (ObjectStoreOperation::Delete, FaultAction::FailBeforeEffect),
+        ],
+    );
+    let harness = EffectHarness::with_config(durable, EffectsConfig::default());
+    harness.rebuild_all_partitions().await;
+    let mut request = start_request("order-1");
+    request.step_options = Some(StepOptions {
+        wait_for_timeout_seconds: 5,
+        heartbeat_timeout_seconds: 600,
+        ..StepOptions::default()
+    });
+    let run_id = harness.start_flow(request, settings());
+    let wait_for = harness.dispatcher.next_dispatch().await;
+    object_fault.set_enabled(true);
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    wait_for.complete_wait_for(InvokeWaitForMethodResponse {
+        upsert_attributes: vec![hard_delete_write("secret", string_value("card-4242"))],
+        ..InvokeWaitForMethodResponse::default()
+    });
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    harness.settle().await;
+    assert_eq!(
+        attempt_failure_kinds(&harness, 1),
+        vec![StepAttemptFailureKind::MethodTimeout as i32],
+        "a failed deletion must not propose a second failure for the attempt"
+    );
+    // The ledger keeps the upload, so recovery deletes the object after a restart.
+    assert_eq!(pending_upload_count(&harness), 1);
+    let owner = harness
+        .hard_delete_objects
+        .owner_of(&EffectHarness::flow("order-1"), run_id);
+    let listing = harness
+        .durable
+        .objects
+        .list(&owner.object_key_prefix(), None, 1000)
+        .await
+        .expect("list succeeds");
+    assert_eq!(listing.objects.len(), 1);
+    harness.shutdown().await;
+}
+
+/// Ledger whose record removals fail, as a local metadata write error would.
+struct UnclearableUploadLedger {
+    ledger: NodeMetaUploadLedger,
+}
+
+impl HardDeleteUploadLedger for UnclearableUploadLedger {
+    fn record_pending_uploads(
+        &self,
+        uploads: &[PendingHardDeleteUpload],
+    ) -> Result<(), EffectError> {
+        self.ledger.record_pending_uploads(uploads)
+    }
+
+    fn clear_pending_uploads(&self, _object_keys: &[String]) -> Result<(), EffectError> {
+        Err(EffectError::CorruptState {
+            table: "NodeMeta",
+            key: "node".to_owned(),
+            detail: "injected write failure".to_owned(),
+        })
+    }
+
+    fn pending_uploads(&self) -> Result<Vec<PendingHardDeleteUpload>, EffectError> {
+        self.ledger.pending_uploads()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_committed_result_whose_ledger_cleanup_fails_proposes_no_failure() {
+    let durable = DurableState::new();
+    let ledger = Arc::new(UnclearableUploadLedger {
+        ledger: NodeMetaUploadLedger::new(
+            Arc::clone(&durable.local_store) as _,
+            Arc::new(Mutex::new(())),
+        ),
+    });
+    let harness = EffectHarness::with_ledger(durable, EffectsConfig::default(), ledger);
+    harness.rebuild_all_partitions().await;
+    harness.start_flow(start_request("order-1"), settings());
+    let wait_for = harness.dispatcher.next_dispatch().await;
+    wait_for.complete_wait_for(InvokeWaitForMethodResponse {
+        upsert_attributes: vec![hard_delete_write("secret", string_value("card-4242"))],
+        ..InvokeWaitForMethodResponse::default()
+    });
+    // The Execute dispatch stays open; dropping it would fail that attempt.
+    let _execute = harness.dispatcher.next_dispatch().await;
+    harness.settle().await;
+    assert_eq!(
+        harness.runtime.commands_matching(is_method_completed).len(),
+        1
+    );
+    assert!(
+        harness
+            .runtime
+            .commands_matching(is_attempt_failed)
+            .is_empty(),
+        "a failed ledger cleanup must not fail the committed attempt"
+    );
+    // Recovery finds the object referenced and only clears its record.
+    assert_eq!(pending_upload_count(&harness), 1);
     harness.shutdown().await;
 }
