@@ -32,6 +32,7 @@ import {
   triggerGet,
   triggerPost,
 } from "./flow-smoke-helper.js";
+import { skipWhenServerZd } from "../server-zd.js";
 
 let server: SampleServer;
 let context: FlowSmokeContext;
@@ -66,6 +67,7 @@ function flowSmokeCatalog(): FlowSmokeEntry[] {
     },
     {
       name: "products/money-transfer",
+      serverZdUnsupportedFeature: "failure policies",
       trigger: () =>
         triggerGet(context, "/products/money-transfer/start", {
           amount: 100,
@@ -77,6 +79,7 @@ function flowSmokeCatalog(): FlowSmokeEntry[] {
     },
     {
       name: "products/order-processing",
+      serverZdUnsupportedFeature: "failure policies",
       trigger: () => triggerGet(context, "/products/order-processing/start"),
       flags: defaultFlags(),
     },
@@ -111,6 +114,7 @@ function flowSmokeCatalog(): FlowSmokeEntry[] {
     },
     {
       name: "patterns/polling",
+      serverZdUnsupportedFeature: "failure policies",
       trigger: () =>
         triggerGet(context, "/patterns/polling/start", {
           workflowId: newFlowId("pattern-polling"),
@@ -132,6 +136,7 @@ function flowSmokeCatalog(): FlowSmokeEntry[] {
     },
     {
       name: "patterns/entity-store",
+      serverZdUnsupportedFeature: "Attribute Store sync",
       trigger: async () => {
         const userId = newFlowId("entity-store");
         const result = await triggerPost(context, "/patterns/entity-store/profile", {
@@ -170,6 +175,7 @@ function flowSmokeCatalog(): FlowSmokeEntry[] {
     },
     {
       name: "patterns/manual-recovery",
+      serverZdUnsupportedFeature: "failure policies",
       trigger: () =>
         triggerGet(context, "/patterns/manual-recovery/start", {
           workflowId: newFlowId("manual-recovery"),
@@ -218,6 +224,7 @@ function flowSmokeCatalog(): FlowSmokeEntry[] {
     },
     {
       name: "patterns/recovery",
+      serverZdUnsupportedFeature: "failure policies",
       trigger: () =>
         triggerGet(context, "/patterns/recovery/start", {
           workflowId: newFlowId("recovery"),
@@ -310,6 +317,7 @@ function flowSmokeCatalog(): FlowSmokeEntry[] {
     },
     {
       name: "primitives/step/options-override",
+      serverZdUnsupportedFeature: "failure policies",
       trigger: () =>
         triggerGet(context, "/primitives/step/options-override/start", {
           workflowId: newFlowId("primitive-step-options-override"),
@@ -417,22 +425,28 @@ test("flow smoke catalog size", () => {
   assert.ok(catalog.length > 0, "flow smoke catalog is empty");
 });
 
-test("flow smoke all registered flows via controller", async () => {
+test("flow smoke all registered flows via controller", async (t) => {
   for (const entry of flowSmokeCatalog()) {
-    try {
-      const result = await entry.trigger(context);
-      assert.ok(result.flowId, `${entry.name}: controller response did not include flowID`);
-      await assertFlowSmokeStartStep(entry, result.flowId, result.runId);
-      if (entry.name === "patterns/interruptible") {
-        await triggerGet(context, "/patterns/interruptible/cancel", {
-          workflowId: result.flowId,
-        });
+    const skipReason =
+      entry.serverZdUnsupportedFeature === undefined
+        ? false
+        : skipWhenServerZd(entry.serverZdUnsupportedFeature);
+    await t.test(entry.name, { skip: skipReason }, async () => {
+      try {
+        const result = await entry.trigger(context);
+        assert.ok(result.flowId, `${entry.name}: controller response did not include flowID`);
+        await assertFlowSmokeStartStep(entry, result.flowId, result.runId);
+        if (entry.name === "patterns/interruptible") {
+          await triggerGet(context, "/patterns/interruptible/cancel", {
+            workflowId: result.flowId,
+          });
+        }
+        await assertFlowSmokeNoUnexpectedFailures(entry, result.flowId, result.runId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${entry.name}: ${message}`, { cause: error });
       }
-      await assertFlowSmokeNoUnexpectedFailures(entry, result.flowId, result.runId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`${entry.name}: ${message}`, { cause: error });
-    }
+    });
   }
 });
 

@@ -21,6 +21,7 @@ use prost::Message;
 
 use crate::command_handlers::CommandScope;
 use crate::command_handlers::command_replies::{error_reply, grpc_code, ok_reply};
+use crate::command_handlers::flow_close::{FlowClosing, close_flow};
 use crate::command_handlers::run_cursor::RunCursor;
 use crate::projections::history_events;
 use crate::state_access::FlowTransaction;
@@ -410,6 +411,23 @@ pub(crate) fn apply_method_completed(
             step.step_execution_id
         )));
     };
+    if let step_method_completed_command::Response::WaitFor(wait_response) = response
+        && let Some(condition) = wait_response.waiting_condition.as_ref()
+        && !condition.sub_flow_conditions.is_empty()
+        && let Err(detail) = crate::cross_flow::validate_child_start_conditions(
+            cursor.record.flow_config.as_ref(),
+            &condition.sub_flow_conditions,
+        )
+    {
+        history_events::record_method_completed(transaction, cursor, &step, command)?;
+        close_flow(
+            transaction,
+            cursor,
+            scope,
+            FlowClosing::failed(FlowErrorType::InvalidUserFlowCode, detail),
+        )?;
+        return Ok(StepCommandOutcome::Applied(ok_reply()));
+    }
     if !command.app_worker_id.is_empty() {
         cursor.record.sticky_app_worker_id = command.app_worker_id.clone();
     }
@@ -440,6 +458,7 @@ pub(crate) fn apply_method_completed(
                 cursor,
                 &mut step,
                 &effects,
+                scope.now_micros,
             )? {
                 return Ok(StepCommandOutcome::RejectedResult(rejection));
             }
@@ -465,6 +484,7 @@ pub(crate) fn apply_method_completed(
                 cursor,
                 &mut step,
                 &effects,
+                scope.now_micros,
             )? {
                 return Ok(StepCommandOutcome::RejectedResult(rejection));
             }

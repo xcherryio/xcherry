@@ -9,13 +9,12 @@
 //! History events projected while applying commands (plan section 9.9).
 
 use dexzd_protocol::dex::{
-    ChannelResult, ConditionResults, FlowClosedHistoryEvent, FlowExecutionId, FlowInitialStart,
-    FlowResult, FlowStartedOrContinuedHistoryEvent, Kv, PendingStepMethodPhase,
-    StepCompletionOutput, StepExecuteCompletedEvent, StepExecuteCompletedOutput,
-    StepExecuteFailedEvent, StepMethodEventContext, StepMethodEventInput, StepMethodFailedOutput,
-    StepMethodFailure, StepMethodOptions, StepMethodPendingEvent, StepWaitForCompletedEvent,
-    StepWaitForCompletedOutput, StepWaitForFailedEvent, flow_history_event,
-    flow_started_or_continued_history_event,
+    FlowClosedHistoryEvent, FlowExecutionId, FlowInitialStart, FlowStartedOrContinuedHistoryEvent,
+    Kv, PendingStepMethodPhase, StepCompletionOutput, StepExecuteCompletedEvent,
+    StepExecuteCompletedOutput, StepExecuteFailedEvent, StepMethodEventContext,
+    StepMethodEventInput, StepMethodFailedOutput, StepMethodFailure, StepMethodOptions,
+    StepMethodPendingEvent, StepWaitForCompletedEvent, StepWaitForCompletedOutput,
+    StepWaitForFailedEvent, flow_history_event, flow_started_or_continued_history_event,
 };
 use dexzd_protocol::dexzd::v1::{
     StartFlowReply, StepExecutionRecord, StepInvocationPhase, StepMethod,
@@ -25,6 +24,7 @@ use dexzd_protocol::dexzd::v1::{
 use crate::ApplyError;
 use crate::command_handlers::run_cursor::{RunCursor, timestamp};
 use crate::state_access::FlowTransaction;
+use crate::steps::wait_conditions::wire_condition_results;
 use crate::values::wire_value;
 
 pub(crate) fn record_flow_started(
@@ -168,7 +168,7 @@ fn method_input(cursor: &RunCursor, step: &StepExecutionRecord) -> StepMethodEve
         condition_results: if is_execute {
             step.condition_results
                 .as_ref()
-                .map(|results| condition_results_input(cursor, results))
+                .map(|results| wire_condition_results(cursor.rows, results))
         } else {
             None
         },
@@ -204,52 +204,6 @@ fn method_input(cursor: &RunCursor, step: &StepExecutionRecord) -> StepMethodEve
         } else {
             Vec::new()
         },
-    }
-}
-
-fn condition_results_input(
-    cursor: &RunCursor,
-    results: &dexzd_protocol::dexzd::v1::ConditionResultsRecord,
-) -> ConditionResults {
-    ConditionResults {
-        channel_results: results
-            .channel_results
-            .iter()
-            .map(|result| ChannelResult {
-                condition_id: result.condition_id.clone(),
-                condition_status: result.condition_status,
-                channel_name: result.channel_name.clone(),
-                values: result
-                    .messages
-                    .iter()
-                    .filter_map(|message| message.value.as_ref())
-                    .map(|stored| wire_value(cursor.rows, stored))
-                    .collect(),
-            })
-            .collect(),
-        timer_results: results.timer_results.clone(),
-        wait_for_failed: results.wait_for_failed,
-        sub_flow_results: results
-            .sub_flow_results
-            .iter()
-            .map(|result| FlowResult {
-                flow_status: result.flow_status,
-                results: result
-                    .results
-                    .iter()
-                    .map(|output| StepCompletionOutput {
-                        completed_step_type: output.completed_step_type.clone(),
-                        completed_step_execution_id: output.completed_step_execution_id.clone(),
-                        completed_step_output: output
-                            .completed_step_output
-                            .as_ref()
-                            .map(|stored| wire_value(cursor.rows, stored)),
-                    })
-                    .collect(),
-                error_type: result.error_type,
-                error_message: result.error_message.clone(),
-            })
-            .collect(),
     }
 }
 

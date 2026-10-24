@@ -6,11 +6,13 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use dexzd_keyspace::{FlowHash, RunId};
+use dexzd_keyspace::row_keys::history_record_key;
+use dexzd_keyspace::{ColumnFamily, FlowHash, RunId};
 use dexzd_protocol::dex::{
-    AttributeMatch, AttributeMatchOperator, FlowStatus, Value, WaitForHistoryEventResponse, value,
+    AttributeMatch, AttributeMatchOperator, FlowStatus, Value, WaitForHistoryEventResponse,
+    flow_history_event, value,
 };
-use dexzd_protocol::dexzd::v1::{StepExecutionPhase, stored_value};
+use dexzd_protocol::dexzd::v1::{HistoryRecord, StepExecutionPhase, stored_value};
 use prost::Message;
 
 use crate::FlowStateReader;
@@ -20,11 +22,11 @@ use crate::read_model::{ReadModelError, RunView};
 /// Result of waiting for one Step execution in the current Flow run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepCompletionState {
-    /// The Step completed normally.
+    /// The Step completed, or its cancellation counts as completion.
     Completed,
     /// The Step has not completed and the Flow is still running.
     NotCompleted,
-    /// The Step was canceled or the Flow ended before completion.
+    /// The Step failed or a terminated Flow ended it without completion.
     EndedWithoutCompletion,
 }
 
@@ -67,18 +69,39 @@ pub fn step_completion_state(
     else {
         return Ok(StepCompletionState::Completed);
     };
-    if step.phase == StepExecutionPhase::Completed as i32 {
-        return Ok(StepCompletionState::Completed);
+    match StepExecutionPhase::try_from(step.phase) {
+        Ok(StepExecutionPhase::Completed) => Ok(StepCompletionState::Completed),
+        Ok(StepExecutionPhase::Canceled) => {
+            if view.record.status != FlowStatus::Terminated as i32 {
+                return Ok(StepCompletionState::Completed);
+            }
+            // Bookkeeping commands can advance next_run_seq after the close.
+            let key = history_record_key(flow_hash, run_id, step.completed_seq);
+            let record: Option<HistoryRecord> =
+                view.transaction
+                    .get_message(ColumnFamily::History, &key, "history record")?;
+            if record.is_some_and(|record| {
+                record.events.iter().any(|event| {
+                    matches!(
+                        event.payload,
+                        Some(flow_history_event::Payload::FlowClosed(_))
+                    )
+                })
+            }) {
+                Ok(StepCompletionState::EndedWithoutCompletion)
+            } else {
+                Ok(StepCompletionState::Completed)
+            }
+        }
+        Ok(StepExecutionPhase::Failed) => Ok(StepCompletionState::EndedWithoutCompletion),
+        Ok(
+            StepExecutionPhase::WaitFor
+            | StepExecutionPhase::Waiting
+            | StepExecutionPhase::Execute
+            | StepExecutionPhase::Unspecified,
+        )
+        | Err(_) => Ok(StepCompletionState::NotCompleted),
     }
-    Ok(
-        if step.phase == StepExecutionPhase::Canceled as i32
-            || view.record.status != FlowStatus::Running as i32
-        {
-            StepCompletionState::EndedWithoutCompletion
-        } else {
-            StepCompletionState::NotCompleted
-        },
-    )
 }
 
 /// Returns the matching Attribute value, or None while the wait predicate is false.

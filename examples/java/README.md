@@ -46,6 +46,10 @@ Defaults connect to Dex at `localhost:8801`. Override with
 `DEX_FLOW_SERVICE_ADDRESS`, `DEX_WORKER_BIND_ADDRESS`, `DEX_WORKER_TARGET`,
 `DEX_EXAMPLES_HTTP_ADDRESS`, `DEX_BLOB_CACHE_DIR`.
 
+- `DEX_EXAMPLES_WORKER_MODE`: `push` (default) listens on the Worker bind
+  address. `pull` connects to Dex as a pull Worker, ignores the bind address and
+  target, and starts Flows with the pull Worker target.
+
 ## Verify
 
 Run the integration suite against an isolated `dexcli dev` environment:
@@ -53,6 +57,12 @@ Run the integration suite against an isolated `dexcli dev` environment:
 ```bash
 ./run-integration-tests.sh
 ```
+
+Set `DEX_EXAMPLES_WORKER_MODE=pull` to run the same tests with pull Workers.
+Set `DEX_INTEG_ENGINE=zd` to run them against server-zd. That mode defaults to
+pull Workers, does not start the entity store, and skips samples that use
+failure policies, start delay, Flow retry, or Attribute Store sync. Set
+`DEX_SERVER_ZD_BINARY` to reuse a built `dex-server-zd`.
 
 Examples catch concrete types from `io.superdurable.dex.exceptions`.
 `FlowNotFoundException` is for read operations with no matching execution;

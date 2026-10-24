@@ -20,9 +20,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Client, Registry, Worker, openBlobCache, type Flow } from "@superdurable/dex";
+import { Client, Registry, openBlobCache, type Flow } from "@superdurable/dex";
 
 import { HOUR_MS } from "../../src/config/env.js";
+import {
+  readWorkerModeFromEnvironment,
+  startExampleWorker,
+} from "../../src/config/worker-mode.js";
 import { failureRecoveryFlow } from "../../src/patterns/recovery/failure-recovery-flow.js";
 import { channelFlow } from "../../src/primitives/channel/channel-flow.js";
 import { streamFlow } from "../../src/primitives/stream/stream-flow.js";
@@ -56,13 +60,12 @@ export interface IntegEnvironment {
   close(): Promise<void>;
 }
 
-let shared: IntegEnvironment | undefined;
+let shared: Promise<IntegEnvironment> | undefined;
 let users = 0;
 
 export async function acquireIntegEnvironment(): Promise<IntegEnvironment> {
-  if (shared === undefined) {
-    shared = await startIntegEnvironment();
-  }
+  // Test files acquire concurrently; sharing the pending start keeps one Worker per Flow type.
+  shared ??= startIntegEnvironment();
   users += 1;
   return shared;
 }
@@ -70,8 +73,9 @@ export async function acquireIntegEnvironment(): Promise<IntegEnvironment> {
 export async function releaseIntegEnvironment(): Promise<void> {
   users -= 1;
   if (users === 0 && shared !== undefined) {
-    await shared.close();
+    const environment = shared;
     shared = undefined;
+    await (await environment).close();
   }
 }
 
@@ -96,11 +100,16 @@ async function startIntegEnvironment(): Promise<IntegEnvironment> {
     directory: cacheDirectory,
     maxBytes: 64 * 1024 * 1024,
   });
-  const worker = new Worker(registry, blobCache, {
-    bindAddress: `127.0.0.1:${await availablePort()}`,
+  const worker = await startExampleWorker(
+    registry,
+    blobCache,
+    readWorkerModeFromEnvironment(),
     serverAddress,
-  });
-  await worker.start();
+    {
+      bindAddress: `127.0.0.1:${await availablePort()}`,
+      serverAddress,
+    },
+  );
   const client = new Client(registry, blobCache, {
     serverAddress,
     workerTarget: worker.workerTarget,

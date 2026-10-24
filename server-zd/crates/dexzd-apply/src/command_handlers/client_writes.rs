@@ -174,7 +174,7 @@ pub(crate) fn apply_channel_publish(
             messages: request.messages.clone(),
         },
     ));
-    wait_conditions::on_channels_changed(transaction, &mut cursor, &channels)?;
+    wait_conditions::on_channels_changed(transaction, &mut cursor, scope.now_micros, &channels)?;
     Ok(HandlerResult::Applied(cursor.finish(
         transaction,
         scope,

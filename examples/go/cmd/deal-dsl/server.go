@@ -35,6 +35,7 @@ import (
 	"github.com/superdurable/dex/blob-cache-go/blobcache"
 	"github.com/superdurable/dex/examples/go/products/deal-dsl"
 	"github.com/superdurable/dex/examples/go/server/httputil"
+	"github.com/superdurable/dex/examples/go/shared/workermode"
 	sdk "github.com/superdurable/dex/sdk-go/dex"
 )
 
@@ -49,6 +50,7 @@ type dealDSLServer struct {
 	dealRepository dealdsl.Repository
 	httpServer     *http.Server
 	workerAddress  string
+	workerMode     workermode.WorkerMode
 	workerResult   chan error
 	httpResult     chan error
 }
@@ -79,13 +81,12 @@ func newDealDSLServer(ctx context.Context) (*dealDSLServer, error) {
 		database.Close()
 		return nil, errors.Join(fmt.Errorf("register Deal DSL flow: %w", err), cache.Close())
 	}
-	workerOptions := sdk.WorkerOptions{
-		BindAddress:        environmentOr("DEX_WORKER_BIND_ADDRESS", "127.0.0.1:8803"),
-		FlowServiceAddress: os.Getenv("DEX_FLOW_SERVICE_ADDRESS"),
+	workerMode, err := workermode.ReadWorkerModeFromEnvironment()
+	if err != nil {
+		database.Close()
+		return nil, errors.Join(err, cache.Close())
 	}
-	if target := os.Getenv("DEX_WORKER_TARGET"); target != "" {
-		workerOptions.WorkerTarget.Address = target
-	}
+	workerOptions := newDealDSLWorkerOptions(workerMode)
 	worker, err := sdk.NewWorker(flowRegistry, cache, workerOptions)
 	if err != nil {
 		database.Close()
@@ -109,6 +110,7 @@ func newDealDSLServer(ctx context.Context) (*dealDSLServer, error) {
 		dealFlow:       dealFlow,
 		dealRepository: dealRepository,
 		workerAddress:  workerOptions.BindAddress,
+		workerMode:     workerMode,
 		workerResult:   make(chan error, 1),
 		httpResult:     make(chan error, 1),
 	}
@@ -175,6 +177,11 @@ func (server *dealDSLServer) serve(ctx context.Context) error {
 }
 
 func (server *dealDSLServer) waitForWorker(ctx context.Context) error {
+	if server.workerMode.IsPull() {
+		registrationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return server.worker.WaitPullRegistered(registrationCtx)
+	}
 	address, err := localWorkerAddress(server.workerAddress)
 	if err != nil {
 		return err
@@ -225,6 +232,23 @@ func (server *dealDSLServer) close() error {
 	cacheErr := server.cache.Close()
 	server.database.Close()
 	return errors.Join(httpErr, workerErr, clientErr, cacheErr)
+}
+
+func newDealDSLWorkerOptions(workerMode workermode.WorkerMode) sdk.WorkerOptions {
+	if workerMode.IsPull() {
+		return sdk.WorkerOptions{
+			FlowServiceAddress: os.Getenv("DEX_FLOW_SERVICE_ADDRESS"),
+			Pull:               workermode.NewExamplePullWorkerOptions(),
+		}
+	}
+	workerOptions := sdk.WorkerOptions{
+		BindAddress:        environmentOr("DEX_WORKER_BIND_ADDRESS", "127.0.0.1:8803"),
+		FlowServiceAddress: os.Getenv("DEX_FLOW_SERVICE_ADDRESS"),
+	}
+	if target := os.Getenv("DEX_WORKER_TARGET"); target != "" {
+		workerOptions.WorkerTarget.Address = target
+	}
+	return workerOptions
 }
 
 func environmentOr(name string, fallback string) string {

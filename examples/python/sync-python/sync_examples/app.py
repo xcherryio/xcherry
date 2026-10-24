@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import socket
 import threading
 import time
@@ -40,6 +41,10 @@ from dex_examples.products.engagement.engagement_flow import EngagementFlow
 from dex_examples.products.money_transfer.money_transfer_flow import MoneyTransferFlow
 from dex_examples.products.subscription.subscription_flow import SubscriptionFlow
 from dex_examples.shared.my_dependency_service import MyDependencyService
+from dex_examples.shared.worker_mode import (
+    PULL_REGISTRATION_TIMEOUT_SECONDS,
+    new_example_pull_worker_options,
+)
 from sync_examples.config import SyncExamplesConfig
 from sync_examples.patterns.parent_child.child_flow import ChildFlow
 from sync_examples.patterns.parent_child.parent_flow import ParentFlowV2
@@ -76,16 +81,7 @@ class SyncExampleApp:
         self.blob_cache = open_blob_cache(
             BlobCacheConfig(str(config.blob_cache_dir), 1 << 30)
         )
-        worker_options = WorkerOptions(
-            bind_address=config.worker_bind_address,
-            server_address=config.server_address,
-            worker_target=(
-                WorkerTarget(config.worker_target)
-                if config.worker_target
-                else None
-            ),
-        )
-        self.worker = Worker(self.registry, self.blob_cache, worker_options)
+        self.worker = Worker(self.registry, self.blob_cache, _new_worker_options(config))
         self._client = Client(
             self.registry,
             self.blob_cache,
@@ -95,6 +91,8 @@ class SyncExampleApp:
             ),
         )
         self._worker_thread: threading.Thread | None = None
+        self._is_worker_closed = False
+        self._is_blob_cache_closed = False
 
     @property
     def client(self) -> Client:
@@ -106,25 +104,91 @@ class SyncExampleApp:
         return self._client
 
     def start_worker(self) -> None:
+        """Starts the Worker thread, closing this app if startup fails.
+
+        Raises:
+            BaseException: The original startup or registration error.
+        """
         if self._worker_thread is not None:
             return
-        self._worker_thread = threading.Thread(
-            target=self.worker.start,
-            name="dex-sync-example-worker",
-            daemon=True,
-        )
-        self._worker_thread.start()
-        _await_worker(self.worker.worker_target.address)
+        try:
+            self._worker_thread = threading.Thread(
+                target=self.worker.start,
+                name="dex-sync-example-worker",
+                daemon=True,
+            )
+            self._worker_thread.start()
+            if self.config.worker_mode.is_pull:
+                self.worker.wait_pull_registered(
+                    timeout=PULL_REGISTRATION_TIMEOUT_SECONDS
+                )
+                return
+            _await_worker(self.worker.worker_target.address)
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                _logger.exception("failed to close SyncExampleApp after startup failed")
+            raise
 
     def close(self) -> None:
+        """Closes the Client, Worker, Worker thread, and BlobCache.
+
+        Every close step runs even when an earlier step fails. A later call
+        retries only the steps that have not completed.
+
+        Raises:
+            Exception: The first failure from a close step.
+        """
+        close_errors: list[Exception] = []
         if self._client is not None:
-            self._client.close()
-            self._client = None
-        self.worker.close()
+            try:
+                self._client.close()
+                self._client = None
+            except Exception as error:
+                close_errors.append(error)
+        if not self._is_worker_closed:
+            try:
+                self.worker.close()
+                self._is_worker_closed = True
+            except Exception as error:
+                close_errors.append(error)
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=10)
             self._worker_thread = None
-        self.blob_cache.close()
+        if not self._is_blob_cache_closed:
+            try:
+                self.blob_cache.close()
+                self._is_blob_cache_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        _raise_first_close_error(close_errors)
+
+_logger = logging.getLogger(__name__)
+
+
+def _raise_first_close_error(close_errors: list[Exception]) -> None:
+    for error in close_errors[1:]:
+        _logger.error("another close step failed", exc_info=error)
+    if close_errors:
+        raise close_errors[0]
+
+
+def _new_worker_options(config: SyncExamplesConfig) -> WorkerOptions:
+    if config.worker_mode.is_pull:
+        return WorkerOptions(
+            server_address=config.server_address,
+            pull=new_example_pull_worker_options(),
+        )
+    return WorkerOptions(
+        bind_address=config.worker_bind_address,
+        server_address=config.server_address,
+        worker_target=(
+            WorkerTarget(config.worker_target)
+            if config.worker_target
+            else None
+        ),
+    )
 
 
 def _await_worker(address: str) -> None:

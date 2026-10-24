@@ -177,9 +177,7 @@ impl RunCursor {
                 state_hash: Vec::new(),
             },
         );
-        if scope.behavior_version.has_search_projection() {
-            search_document::refresh_search_document(transaction, &self, scope)?;
-        }
+        search_document::refresh_search_document(transaction, &self, scope)?;
         self.rows.put_run_record(transaction, &self.record);
         if let Some(last_event_id) = last_event_id {
             self.wake(WaitableChange::HistoryAppended { last_event_id });

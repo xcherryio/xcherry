@@ -27,18 +27,19 @@ use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, 
 use dexzd_protocol::dex::{
     ActionPermissionMapping, ActionPermissionMappings, AttributeMatch, AttributeMatchOperator,
     AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType, ConditionStatus, FlowConfig,
-    FlowStartOptions, FlowStatus, IndexConfig, IndexType, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, LoadBlobRequestEntry, PublishToChannelRequest,
-    SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions,
-    StopFlowRequest, StopType, TimerResult, UpdateFlowConfigRequest, Value, WorkerTarget,
-    flow_history_event, value,
+    FlowStartOptions, FlowStatus, FlowTimeoutPolicy, IndexConfig, IndexType,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, LoadBlobRequestEntry,
+    PublishToChannelRequest, SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement,
+    StepOptions, StopFlowRequest, StopType, TimerResult, UpdateFlowConfigRequest, Value,
+    WorkerErrorResponse, WorkerTarget, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributesSetCommand, ChannelPublishCommand, ConditionResultsRecord, FlowCommand,
-    FlowConfigUpdateCommand, FlowStartCommand, FlowStopCommand, HardDeleteObjectReference,
-    RunRecord, RunSettings, StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey,
-    StepMethod, StepMethodCompletedCommand, StoredFlowResult, flow_command::Command,
-    step_method_completed_command,
+    FlowConfigUpdateCommand, FlowStartCommand, FlowStopCommand, FlowTimeoutTimerId,
+    HardDeleteObjectReference, RunRecord, RunSettings, StepAttemptFailedCommand,
+    StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey, StepMethod,
+    StepMethodCompletedCommand, StoredFlowResult, TimerId, TimersFiredCommand,
+    flow_command::Command, step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -112,7 +113,6 @@ struct Harness {
     flow_id: String,
     run_id: RunId,
     now_micros: i64,
-    behavior_version: u32,
 }
 
 impl Harness {
@@ -132,7 +132,6 @@ impl Harness {
             flow_id: flow_id.to_owned(),
             run_id,
             now_micros: 1_800_000_000_000_000,
-            behavior_version: 2,
         }
     }
 
@@ -146,7 +145,7 @@ impl Harness {
             } else {
                 self.run_id.as_bytes().to_vec()
             },
-            behavior_version: self.behavior_version,
+            behavior_version: 1,
             proposed_at_micros: self.now_micros,
             tenant_id: 0,
             command: Some(body),
@@ -162,12 +161,22 @@ impl Harness {
     }
 
     fn start(&mut self, options: FlowStartOptions, step_options: Option<StepOptions>) {
+        self.start_with_timeout(options, step_options, 0);
+    }
+
+    fn start_with_timeout(
+        &mut self,
+        options: FlowStartOptions,
+        step_options: Option<StepOptions>,
+        flow_timeout_seconds: i32,
+    ) {
         let request = StartFlowRequest {
             flow_id: self.flow_id.clone(),
             flow_type: "OrderFlow".to_owned(),
             start_step_type: "ChargeStep".to_owned(),
             step_input: Some(string_value("input")),
             step_options,
+            flow_timeout_seconds,
             request_id: "start-1".to_owned(),
             flow_start_options: Some(options),
             ..StartFlowRequest::default()
@@ -182,6 +191,7 @@ impl Harness {
                 request_dedup_capacity: 1000,
                 ..RunSettings::default()
             }),
+            resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
             worker_target: Some(WorkerTarget {
                 is_pull_mode: true,
                 ..WorkerTarget::default()
@@ -209,9 +219,13 @@ impl Harness {
     }
 
     fn start_attempt(&mut self, method: StepMethod) {
+        self.start_attempt_for("ChargeStep-1", method);
+    }
+
+    fn start_attempt_for(&mut self, step_execution_id: &str, method: StepMethod) {
         self.apply(Command::StepAttemptStarted(StepAttemptStartedCommand {
             invocation: Some(StepInvocationKey {
-                step_execution_id: "ChargeStep-1".to_owned(),
+                step_execution_id: step_execution_id.to_owned(),
                 method: method as i32,
             }),
             attempt: 1,
@@ -234,9 +248,13 @@ impl Harness {
     }
 
     fn complete_execute(&mut self, decision: StepDecision) {
+        self.complete_execute_for("ChargeStep-1", decision);
+    }
+
+    fn complete_execute_for(&mut self, step_execution_id: &str, decision: StepDecision) {
         self.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
             invocation: Some(StepInvocationKey {
-                step_execution_id: "ChargeStep-1".to_owned(),
+                step_execution_id: step_execution_id.to_owned(),
                 method: StepMethod::Execute as i32,
             }),
             attempt: 1,
@@ -251,9 +269,13 @@ impl Harness {
     }
 
     fn stop(&mut self) {
+        self.stop_with(StopType::Cancel);
+    }
+
+    fn stop_with(&mut self, stop_type: StopType) {
         self.apply(Command::FlowStop(FlowStopCommand {
             request: Some(StopFlowRequest {
-                stop_type: StopType::Cancel as i32,
+                stop_type: stop_type as i32,
                 ..StopFlowRequest::default()
             }),
         }));
@@ -301,6 +323,356 @@ fn index_config(index_key: &str) -> IndexConfig {
         index_key: index_key.to_owned(),
         ..IndexConfig::default()
     }
+}
+
+fn work_queue_permissions_write(permissions: &[&str]) -> AttributeWrite {
+    AttributeWrite {
+        key: "DexWorkQueuePermissions".to_owned(),
+        value: Some(Value {
+            kind: Some(value::Kind::ObjValue(dexzd_protocol::dex::EncodedObject {
+                encoding: "json".to_owned(),
+                payload: serde_json::to_vec(permissions)
+                    .expect("a string slice serializes into JSON"),
+            })),
+        }),
+        index_config: Some(IndexConfig {
+            r#type: IndexType::KeywordArray as i32,
+            ..index_config("DexWorkQueuePermissions")
+        }),
+        ..AttributeWrite::default()
+    }
+}
+
+fn action_permission_mapping(
+    attribute_key: &str,
+    equal_value: Value,
+    required_permission: &str,
+) -> ActionPermissionMapping {
+    ActionPermissionMapping {
+        attribute_key: attribute_key.to_owned(),
+        equal_values: vec![equal_value],
+        required_permission: required_permission.to_owned(),
+    }
+}
+
+fn assert_work_queue_permissions(harness: &Harness, expected: &[&str]) {
+    let expected: Vec<String> = expected
+        .iter()
+        .map(|permission| (*permission).to_owned())
+        .collect();
+    let document = get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
+        .expect("search document read succeeds")
+        .expect("search document exists");
+    assert_eq!(document.work_queue_permissions, expected);
+    let indexed = document
+        .attributes
+        .iter()
+        .find(|attribute| attribute.index_key == "DexWorkQueuePermissions");
+    let attributes = get_attributes(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        &["DexWorkQueuePermissions".to_owned()],
+        false,
+    )
+    .expect("Attribute read succeeds");
+    if expected.is_empty() {
+        assert!(indexed.is_none());
+        assert!(attributes.response.attributes.is_empty());
+    } else {
+        let indexed = indexed.expect("permissions are indexed");
+        assert_eq!(indexed.index_type, IndexType::KeywordArray as i32);
+        let expected_value =
+            work_queue_permissions_write(&expected.iter().map(String::as_str).collect::<Vec<_>>())
+                .value;
+        assert_eq!(indexed.value.as_ref(), expected_value.as_ref());
+        assert_eq!(attributes.response.attributes.len(), 1);
+        assert_eq!(
+            attributes.response.attributes[0].value.as_ref(),
+            expected_value.as_ref()
+        );
+    }
+}
+
+#[test]
+fn initial_work_queue_permissions_attribute_is_searchable() {
+    let mut harness = Harness::new();
+    harness.start(
+        FlowStartOptions {
+            attributes: vec![work_queue_permissions_write(&[
+                "permission-x",
+                "permission-z",
+            ])],
+            ..FlowStartOptions::default()
+        },
+        None,
+    );
+    assert_work_queue_permissions(&harness, &["permission-x", "permission-z"]);
+    let permission_set_key = run_singleton_key(
+        harness.context.flow_hash,
+        harness.run_id,
+        RunTable::PermissionSet,
+    );
+    assert!(
+        !harness
+            .state
+            .rows
+            .contains_key(&(ColumnFamily::Flow, permission_set_key))
+    );
+}
+
+#[test]
+fn action_permission_projection_follows_attribute_state_matrix() {
+    let mut harness = Harness::new();
+    harness.start(
+        FlowStartOptions {
+            attributes: vec![
+                AttributeWrite {
+                    key: "first".to_owned(),
+                    value: Some(string_value("A")),
+                    ..AttributeWrite::default()
+                },
+                AttributeWrite {
+                    key: "second".to_owned(),
+                    value: Some(string_value("C")),
+                    ..AttributeWrite::default()
+                },
+                work_queue_permissions_write(&["permission-x", "permission-z"]),
+            ],
+            ..FlowStartOptions::default()
+        },
+        None,
+    );
+    assert_work_queue_permissions(&harness, &["permission-x", "permission-z"]);
+    let mappings = ActionPermissionMappings {
+        mappings: vec![
+            action_permission_mapping("first", string_value("A"), "permission-x"),
+            action_permission_mapping("first", string_value("B"), "permission-y"),
+            action_permission_mapping("first", string_value("A"), "permission-x"),
+            action_permission_mapping("second", string_value("C"), "permission-z"),
+        ],
+    };
+    for (first, second) in [
+        (Some("B"), "C"),
+        (Some("D"), "C"),
+        (Some("D"), "D"),
+        (None, "C"),
+        (Some("A"), "C"),
+    ] {
+        harness.set_attributes(
+            vec![
+                AttributeWrite {
+                    key: "first".to_owned(),
+                    value: Some(first.map_or_else(
+                        || Value {
+                            kind: Some(value::Kind::NullValue(0)),
+                        },
+                        string_value,
+                    )),
+                    ..AttributeWrite::default()
+                },
+                AttributeWrite {
+                    key: "second".to_owned(),
+                    value: Some(string_value(second)),
+                    ..AttributeWrite::default()
+                },
+            ],
+            Some(mappings.clone()),
+            Vec::new(),
+        );
+        assert_work_queue_permissions(&harness, &["permission-x", "permission-y", "permission-z"]);
+    }
+    let version_before_unchanged_mapping =
+        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
+            .unwrap()
+            .unwrap()
+            .version;
+    harness.set_attributes(Vec::new(), Some(mappings.clone()), Vec::new());
+    assert_eq!(
+        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
+            .unwrap()
+            .unwrap()
+            .version,
+        version_before_unchanged_mapping
+    );
+    assert_work_queue_permissions(&harness, &["permission-x", "permission-y", "permission-z"]);
+    harness.set_attributes(
+        vec![work_queue_permissions_write(&["permission-y"])],
+        None,
+        Vec::new(),
+    );
+    assert_work_queue_permissions(&harness, &["permission-y"]);
+    harness.set_attributes(Vec::new(), Some(mappings), Vec::new());
+    assert_work_queue_permissions(&harness, &["permission-x", "permission-y", "permission-z"]);
+}
+
+#[test]
+fn invalid_work_queue_permissions_are_rewritten_by_mappings() {
+    let mut harness = Harness::new();
+    harness.start(
+        FlowStartOptions {
+            attributes: vec![AttributeWrite {
+                key: "state".to_owned(),
+                value: Some(string_value("ready")),
+                ..AttributeWrite::default()
+            }],
+            ..FlowStartOptions::default()
+        },
+        None,
+    );
+    let mut invalid = work_queue_permissions_write(&[]);
+    invalid.value = Some(string_value("not JSON"));
+    harness.set_attributes(vec![invalid.clone()], None, Vec::new());
+    harness.set_attributes(
+        Vec::new(),
+        Some(ActionPermissionMappings {
+            mappings: vec![action_permission_mapping(
+                "state",
+                string_value("ready"),
+                "permission-ready",
+            )],
+        }),
+        Vec::new(),
+    );
+    assert_work_queue_permissions(&harness, &["permission-ready"]);
+    invalid.value = Some(Value {
+        kind: Some(value::Kind::ObjValue(dexzd_protocol::dex::EncodedObject {
+            encoding: "json".to_owned(),
+            payload: b"{bad".to_vec(),
+        })),
+    });
+    harness.set_attributes(vec![invalid], None, Vec::new());
+    harness.set_attributes(
+        Vec::new(),
+        Some(ActionPermissionMappings::default()),
+        Vec::new(),
+    );
+    assert_work_queue_permissions(&harness, &[]);
+}
+
+#[test]
+fn action_permission_mappings_match_only_equal_scalar_values() {
+    let mut harness = Harness::new();
+    harness.start(
+        FlowStartOptions {
+            attributes: vec![
+                AttributeWrite {
+                    key: "flag".to_owned(),
+                    value: Some(Value {
+                        kind: Some(value::Kind::BoolValue(true)),
+                    }),
+                    ..AttributeWrite::default()
+                },
+                AttributeWrite {
+                    key: "count".to_owned(),
+                    value: Some(Value {
+                        kind: Some(value::Kind::IntValue(42)),
+                    }),
+                    ..AttributeWrite::default()
+                },
+                AttributeWrite {
+                    key: "ratio".to_owned(),
+                    value: Some(Value {
+                        kind: Some(value::Kind::DoubleValue(3.5)),
+                    }),
+                    ..AttributeWrite::default()
+                },
+                AttributeWrite {
+                    key: "object".to_owned(),
+                    value: work_queue_permissions_write(&["x"]).value,
+                    ..AttributeWrite::default()
+                },
+            ],
+            ..FlowStartOptions::default()
+        },
+        None,
+    );
+    let object_value = work_queue_permissions_write(&["x"]).value.unwrap();
+    harness.set_attributes(
+        Vec::new(),
+        Some(ActionPermissionMappings {
+            mappings: vec![
+                action_permission_mapping(
+                    "flag",
+                    Value {
+                        kind: Some(value::Kind::BoolValue(true)),
+                    },
+                    "scalar.bool",
+                ),
+                action_permission_mapping(
+                    "count",
+                    Value {
+                        kind: Some(value::Kind::IntValue(42)),
+                    },
+                    "scalar.int",
+                ),
+                action_permission_mapping(
+                    "ratio",
+                    Value {
+                        kind: Some(value::Kind::DoubleValue(3.5)),
+                    },
+                    "scalar.float",
+                ),
+                action_permission_mapping("object", object_value, "object.ignored"),
+            ],
+        }),
+        Vec::new(),
+    );
+    assert_work_queue_permissions(&harness, &["scalar.bool", "scalar.float", "scalar.int"]);
+}
+
+#[test]
+fn step_method_attribute_writes_project_action_permissions() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    let mappings = ActionPermissionMappings {
+        mappings: vec![
+            action_permission_mapping("stage", string_value("waiting"), "step.waiting"),
+            action_permission_mapping("stage", string_value("executed"), "step.executed"),
+        ],
+    };
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::WaitFor as i32,
+        }),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                upsert_attributes: vec![AttributeWrite {
+                    key: "stage".to_owned(),
+                    value: Some(string_value("waiting")),
+                    ..AttributeWrite::default()
+                }],
+                action_permission_mappings: Some(mappings.clone()),
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        ..StepMethodCompletedCommand::default()
+    }));
+    assert_work_queue_permissions(&harness, &["step.waiting"]);
+    harness.start_attempt(StepMethod::Execute);
+    harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::Execute as i32,
+        }),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::Execute(
+            InvokeExecuteMethodResponse {
+                upsert_attributes: vec![AttributeWrite {
+                    key: "stage".to_owned(),
+                    value: Some(string_value("executed")),
+                    ..AttributeWrite::default()
+                }],
+                action_permission_mappings: Some(mappings),
+                ..InvokeExecuteMethodResponse::default()
+            },
+        )),
+        ..StepMethodCompletedCommand::default()
+    }));
+    assert_work_queue_permissions(&harness, &["step.executed", "step.waiting"]);
 }
 
 #[test]
@@ -382,11 +754,16 @@ fn search_document_tracks_attributes_permissions_active_steps_and_status() {
         .unwrap()
         .unwrap();
     assert_eq!(document.version, 2);
-    assert_eq!(document.attributes.len(), 3);
+    assert_eq!(document.attributes.len(), 4);
     assert_eq!(document.attributes[0].index_key, "Count");
     assert_eq!(document.attributes[0].index_type, IndexType::Int as i32);
-    assert_eq!(document.attributes[1].index_key, "LargestAllowed");
-    assert_eq!(document.attributes[2].index_key, "ReviewState");
+    assert_eq!(document.attributes[1].index_key, "DexWorkQueuePermissions");
+    assert_eq!(
+        document.attributes[1].index_type,
+        IndexType::KeywordArray as i32
+    );
+    assert_eq!(document.attributes[2].index_key, "LargestAllowed");
+    assert_eq!(document.attributes[3].index_key, "ReviewState");
     assert_eq!(document.work_queue_permissions, ["approve"]);
     let all = get_attributes(
         &harness.state,
@@ -781,40 +1158,8 @@ fn active_step_search_mode_respects_skip_wait_for() {
 }
 
 #[test]
-fn earlier_behavior_version_keeps_its_history_and_search_writes() {
+fn version_one_start_writes_search_document_and_index_rows() {
     let mut harness = Harness::new();
-    harness.behavior_version = 1;
-    harness.start(FlowStartOptions::default(), None);
-    assert_eq!(
-        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id).unwrap(),
-        None
-    );
-    harness.stop();
-    let history = get_history_events(
-        &harness.state,
-        harness.context.flow_hash,
-        harness.run_id,
-        1,
-        0,
-        &[],
-        0,
-    )
-    .unwrap();
-    assert_eq!(history.events.len(), 2);
-    assert!(matches!(
-        history.events[1].payload,
-        Some(flow_history_event::Payload::FlowClosed(_))
-    ));
-    assert_eq!(
-        get_search_document(&harness.state, harness.context.flow_hash, harness.run_id).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn search_projection_seeds_indexed_attributes_when_a_run_adopts_new_behavior() {
-    let mut harness = Harness::new();
-    harness.behavior_version = 1;
     harness.start(
         FlowStartOptions {
             attributes: vec![AttributeWrite {
@@ -827,22 +1172,58 @@ fn search_projection_seeds_indexed_attributes_when_a_run_adopts_new_behavior() {
         },
         None,
     );
-    harness.behavior_version = 2;
-    harness.set_attributes(
-        vec![AttributeWrite {
-            key: "other".to_owned(),
-            value: Some(string_value("new")),
-            ..AttributeWrite::default()
-        }],
-        None,
-        Vec::new(),
-    );
     let document = get_search_document(&harness.state, harness.context.flow_hash, harness.run_id)
         .unwrap()
         .unwrap();
+    assert_eq!(document.version, 1);
     assert_eq!(document.attributes.len(), 1);
     assert_eq!(document.attributes[0].index_key, "ReviewState");
     assert_eq!(document.attributes[0].value, Some(string_value("created")));
+    let search_key = tenant_run_index_key(
+        harness.context.partition,
+        IndexKind::SearchDocument,
+        TenantId::DEFAULT,
+        harness.context.flow_hash,
+        harness.run_id,
+    );
+    assert_eq!(
+        harness
+            .state
+            .rows
+            .get(&(ColumnFamily::PartitionIndex, search_key)),
+        Some(&1_u64.to_be_bytes().to_vec())
+    );
+    let list_key = flow_list_index_key(
+        harness.context.partition,
+        TenantId::DEFAULT,
+        "OrderFlow",
+        FlowStatus::Running as u8,
+        harness.context.flow_hash,
+        harness.run_id,
+    );
+    assert!(
+        harness
+            .state
+            .rows
+            .contains_key(&(ColumnFamily::PartitionIndex, list_key))
+    );
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.stop();
+    let history = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        1,
+        0,
+        &[],
+        0,
+    )
+    .unwrap();
+    assert_eq!(history.events.len(), 3);
+    assert!(matches!(
+        history.events[1].payload,
+        Some(flow_history_event::Payload::StepWaitForPending(_))
+    ));
 }
 
 #[test]
@@ -1108,7 +1489,7 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
 }
 
 #[test]
-fn a_step_canceled_at_close_is_not_reported_as_completed() {
+fn a_step_canceled_by_cancel_close_is_reported_as_completed() {
     let mut harness = Harness::new();
     harness.start(FlowStartOptions::default(), None);
     harness.start_attempt(StepMethod::WaitFor);
@@ -1122,7 +1503,7 @@ fn a_step_canceled_at_close_is_not_reported_as_completed() {
             1,
         )
         .unwrap(),
-        StepCompletionState::EndedWithoutCompletion
+        StepCompletionState::Completed
     );
     assert_eq!(
         step_completion_state(
@@ -1131,6 +1512,142 @@ fn a_step_canceled_at_close_is_not_reported_as_completed() {
             harness.run_id,
             "ChargeStep",
             2,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+}
+
+#[test]
+fn a_step_canceled_by_a_decision_is_completed_even_after_terminate() {
+    let mut harness = Harness::new();
+    harness.start(
+        FlowStartOptions::default(),
+        Some(StepOptions {
+            skip_wait_for: true,
+            ..StepOptions::default()
+        }),
+    );
+    harness.start_attempt(StepMethod::Execute);
+    harness.complete_execute(StepDecision {
+        next_steps: vec![
+            StepMovement {
+                step_type: "CancelStep".to_owned(),
+                ..StepMovement::default()
+            },
+            StepMovement {
+                step_type: "DecidingStep".to_owned(),
+                step_options: Some(StepOptions {
+                    skip_wait_for: true,
+                    ..StepOptions::default()
+                }),
+                ..StepMovement::default()
+            },
+        ],
+        ..StepDecision::default()
+    });
+    harness.start_attempt_for("DecidingStep-1", StepMethod::Execute);
+    harness.complete_execute_for(
+        "DecidingStep-1",
+        StepDecision {
+            cancel_step_types: vec!["CancelStep".to_owned()],
+            ..StepDecision::default()
+        },
+    );
+    assert!(!is_flow_closed(&harness.state, harness.context.flow_hash, harness.run_id).unwrap());
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "CancelStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::Completed
+    );
+    harness.stop_with(StopType::Terminate);
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "CancelStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::Completed
+    );
+}
+
+#[test]
+fn a_step_canceled_by_terminate_close_ends_without_completion() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.stop_with(StopType::Terminate);
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+    harness.apply(Command::FlowConfigUpdate(FlowConfigUpdateCommand::default()));
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+}
+
+#[test]
+fn a_failed_step_ends_without_completion() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::NotCompleted
+    );
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.apply(Command::StepAttemptFailed(StepAttemptFailedCommand {
+        invocation: Some(StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::WaitFor as i32,
+        }),
+        attempt: 1,
+        kind: 1,
+        worker_error: Some(WorkerErrorResponse {
+            detail: "unrecoverable".to_owned(),
+            ..WorkerErrorResponse::default()
+        }),
+        is_non_retryable: true,
+        ..StepAttemptFailedCommand::default()
+    }));
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
         )
         .unwrap(),
         StepCompletionState::EndedWithoutCompletion
@@ -1463,6 +1980,38 @@ fn failed_close_drops_pending_step_method_events() {
             ..StopFlowRequest::default()
         }),
     }));
+    let events = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .unwrap()
+    .events;
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events[1].payload,
+        Some(flow_history_event::Payload::FlowClosed(_))
+    ));
+}
+
+#[test]
+fn fail_policy_flow_timeout_drops_pending_step_method_events() {
+    let mut harness = Harness::new();
+    harness.start_with_timeout(FlowStartOptions::default(), None, 30);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.apply(Command::TimersFired(TimersFiredCommand {
+        timers: vec![TimerId {
+            run_attempt: 1,
+            kind: Some(timer_id::Kind::FlowTimeout(FlowTimeoutTimerId {})),
+        }],
+    }));
+    let summary =
+        get_flow_summary(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    assert_eq!(summary.flow_status, FlowStatus::Failed as i32);
     let events = get_history_events(
         &harness.state,
         harness.context.flow_hash,
