@@ -11,8 +11,8 @@ use std::time::Duration;
 use dexzd_api::FlowServiceConfig;
 use dexzd_cluster_metadata::NodeConfig;
 use dexzd_engine::{
-    CommitConfig, EffectsConfig, EngineNodeConfig, LocalStoreConfig, RecoveryConfig, RuntimeConfig,
-    SnapshotConfig, default_run_settings,
+    BlockingWorkPlacement, CommitConfig, EffectsConfig, EngineNodeConfig, LocalStoreConfig,
+    RecoveryConfig, RuntimeConfig, SnapshotConfig, default_run_settings,
 };
 use dexzd_log::LogReadAheadConfig;
 use dexzd_request_validation::ValidationConfig;
@@ -128,6 +128,7 @@ impl ComponentConfigs {
                 },
                 compact_after_replay_bytes: config.local_storage.compact_after_replay_bytes,
             },
+            blocking_work: BlockingWorkPlacement::BlockingThreadPool,
         };
         let runtime = RuntimeConfig {
             max_speculative_commands_per_flow: to_usize(

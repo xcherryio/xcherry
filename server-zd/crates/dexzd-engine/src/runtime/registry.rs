@@ -155,13 +155,15 @@ impl FlowRuntimeRegistry {
         };
         let target = runtime.lock_state().proposed_count;
         let mut settled = runtime.subscribe_settled();
+        // Biased for reproducible simulation; the halt fires once, so the barrier cannot starve.
         tokio::select! {
+            biased;
+            () = self.inner.halted.cancelled() => Err(self.inner.halted_error()),
             result = settled.wait_for(|settled_count| *settled_count >= target) => {
                 result.map(|_| ()).map_err(|_| RuntimeError::NodeStopping {
                     detail: "Flow runtime dropped while waiting for the SYNC barrier".to_owned(),
                 })
             }
-            () = self.inner.halted.cancelled() => Err(self.inner.halted_error()),
         }
     }
 
@@ -366,7 +368,11 @@ impl FlowRuntimeRegistry {
                 }
                 return proposal;
             }
+            // Biased for reproducible simulation; the halt and the release fire once, so the
+            // deadline cannot starve.
             tokio::select! {
+                biased;
+                () = self.inner.halted.cancelled() => return Err(self.inner.halted_error()),
                 () = &mut capacity_released => {}
                 () = tokio::time::sleep_until(deadline) => {
                     return Err(RuntimeError::Unavailable {
@@ -376,7 +382,6 @@ impl FlowRuntimeRegistry {
                         ),
                     });
                 }
-                () = self.inner.halted.cancelled() => return Err(self.inner.halted_error()),
             }
         }
     }

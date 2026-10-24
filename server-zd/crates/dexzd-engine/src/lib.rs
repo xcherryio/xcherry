@@ -8,6 +8,7 @@
 
 //! Runtime that proposes, commits, and applies server-zd commands and runs their effects: dispatch, timers, deliveries, and recovery.
 
+mod blocking_work;
 mod command_applier;
 mod commit;
 mod effects;
@@ -17,6 +18,7 @@ mod recovery;
 mod runtime;
 mod snapshots;
 
+pub use blocking_work::BlockingWorkPlacement;
 pub use command_applier::{CommandApplier, DeterministicCommandApplier};
 pub use commit::{
     CommandCommitter, CommitConfig, CommittedStateView, EngineLocalStore, NodeStopReason,

@@ -33,6 +33,10 @@ tracing.workspace = true
 uuid.workspace = true
 xxhash-rust.workspace = true
 
+[features]
+# Placements and local stores that only deterministic simulations use.
+test-util = []
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

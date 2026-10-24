@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::blocking_work::BlockingWorkPlacement;
 use crate::command_applier::CommandApplier;
 use crate::commit::{
     AppliedPositionAdvancer, CommandCommitter, CommandCommitterParts, CommitConfig, CommitProgress,
@@ -65,6 +66,9 @@ pub struct EngineNodeConfig {
     pub snapshots: SnapshotConfig,
     /// Log replay read-ahead and compaction after a bulk replay.
     pub recovery: crate::recovery::RecoveryConfig,
+    /// Where frame applies, applied-position writes, and snapshot uploads run.
+    /// [`BlockingWorkPlacement::BlockingThreadPool`] in production.
+    pub blocking_work: BlockingWorkPlacement,
 }
 
 /// Shared services the node runs on.
@@ -211,6 +215,7 @@ impl EngineNode {
                     state: state.clone(),
                     committed_commands: runtime.committed_commands.clone(),
                     is_checking_replay: config.commit.debug_replay_checks,
+                    blocking_work: config.blocking_work,
                 },
                 config.commit.applier_lanes,
                 config.commit.applier_queue_frames,
@@ -317,6 +322,7 @@ impl EngineNode {
                 config: config.snapshots.clone(),
                 catalog: tokio::sync::Mutex::new(SnapshotCatalog::default()),
                 last_snapshot_routed_seq: AtomicU64::new(0),
+                blocking_work: config.blocking_work,
             });
             tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
             tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");

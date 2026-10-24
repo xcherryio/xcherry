@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::blocking_work::{BlockingWorkFailure, BlockingWorkPlacement};
 use crate::command_applier::CommandApplier;
 use crate::commit::commit_state::{
     CommitState, NodeStopReason, PendingCommand, partition_stopped_error,
@@ -63,6 +64,7 @@ pub(crate) struct FrameApplier {
     pub(crate) state: Arc<CommitState>,
     pub(crate) committed_commands: Arc<dyn CommittedCommandSink>,
     pub(crate) is_checking_replay: bool,
+    pub(crate) blocking_work: BlockingWorkPlacement,
 }
 
 impl PartitionApplierPool {
@@ -266,8 +268,11 @@ impl ApplierLane {
             match work {
                 LaneWork::Frame(frame) => {
                     let frame_applier = self.frame_applier.clone();
-                    let applied =
-                        tokio::task::spawn_blocking(move || frame_applier.apply_frame(frame)).await;
+                    let applied = self
+                        .frame_applier
+                        .blocking_work
+                        .run(move || frame_applier.apply_frame(frame))
+                        .await;
                     self.stop_on_task_failure(applied);
                 }
                 LaneWork::AdvanceAppliedPosition {
@@ -277,10 +282,13 @@ impl ApplierLane {
                 } => {
                     let frame_applier = self.frame_applier.clone();
                     let partitions = self.partitions();
-                    let advanced = tokio::task::spawn_blocking(move || {
-                        frame_applier.advance_applied_position(&partitions, &position, epoch);
-                    })
-                    .await;
+                    let advanced = self
+                        .frame_applier
+                        .blocking_work
+                        .run(move || {
+                            frame_applier.advance_applied_position(&partitions, &position, epoch);
+                        })
+                        .await;
                     self.stop_on_task_failure(advanced);
                     // The waiter may have given up; nothing else observes completion.
                     let _ignored_send = done.send(());
@@ -296,7 +304,7 @@ impl ApplierLane {
             .collect()
     }
 
-    fn stop_on_task_failure(&self, result: Result<(), tokio::task::JoinError>) {
+    fn stop_on_task_failure(&self, result: Result<(), BlockingWorkFailure>) {
         if let Err(error) = result {
             tracing::error!(lane = self.lane_index, error = %error, "partition applier task failed");
             self.frame_applier

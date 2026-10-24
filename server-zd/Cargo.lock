@@ -1208,20 +1208,29 @@ dependencies = [
 name = "dexzd-simulation"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "dexzd-api",
  "dexzd-apply",
  "dexzd-clock",
+ "dexzd-cluster-metadata",
  "dexzd-engine",
  "dexzd-keyspace",
  "dexzd-log",
  "dexzd-object-store",
  "dexzd-protocol",
+ "dexzd-request-validation",
  "dexzd-storage",
+ "dexzd-stream-store",
+ "dexzd-worker-dispatch",
+ "futures",
  "prost",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "thiserror",
  "tokio",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use crate::recovery::EngineStartError;
 use crate::recovery::node_streams::NodeStreams;
 
 /// Where the node keeps its local state.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum LocalStoreConfig {
     /// RocksDB in `directory`. A missing, corrupt, or outdated store is set aside and
     /// restored from the newest snapshot.
@@ -34,6 +35,25 @@ pub enum LocalStoreConfig {
     },
     /// A new in-memory store restored from the newest snapshot, for simulations and tests.
     InMemory,
+    /// A store a previous process left, for simulations that restart a node with its disk.
+    /// A store that the retained log cannot update is replaced by the newest snapshot.
+    #[cfg(feature = "test-util")]
+    ExistingForTest(Arc<EngineLocalStore>),
+}
+
+impl fmt::Debug for LocalStoreConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RocksDb { directory, options } => formatter
+                .debug_struct("RocksDb")
+                .field("directory", directory)
+                .field("options", options)
+                .finish(),
+            Self::InMemory => formatter.write_str("InMemory"),
+            #[cfg(feature = "test-util")]
+            Self::ExistingForTest(_) => formatter.write_str("ExistingForTest"),
+        }
+    }
 }
 
 /// What recovery needs to decide whether the local store can be reused.
@@ -61,31 +81,68 @@ pub(crate) async fn open_local_store(
         LocalStoreConfig::RocksDb { directory, options } => {
             open_rocksdb_store(directory, *options, object_store, requirements).await?
         }
-        LocalStoreConfig::InMemory => match requirements.snapshot {
-            Some(snapshot) => {
-                let directory =
-                    std::env::temp_dir().join(format!("dexzd-restore-{}", Uuid::now_v7()));
-                let restored = restore_snapshot(
-                    object_store,
-                    &snapshot.manifest_key,
-                    &directory,
-                    RocksDbStoreOptions::default(),
-                )
-                .await?;
-                if matches!(restored, RestoredLocalStore::Memory(_))
-                    && let Err(error) = std::fs::remove_dir_all(&directory)
-                {
-                    tracing::warn!(path = %directory.display(), error = %error, "failed to remove snapshot restore directory");
-                }
-                restored
+        #[cfg(feature = "test-util")]
+        LocalStoreConfig::ExistingForTest(store) => {
+            match reusable_existing_store(store, requirements)? {
+                Some(store) => return Ok(store),
+                None => restore_in_memory(object_store, requirements).await?,
             }
-            None => RestoredLocalStore::Memory(InMemoryLocalStore::new()),
-        },
+        }
+        LocalStoreConfig::InMemory => restore_in_memory(object_store, requirements).await?,
     };
     if let Some(gap) = find_unreplayable_gap(&store, requirements)? {
         return Err(gap);
     }
     Ok(Arc::new(store))
+}
+
+/// Returns `store` when the retained log can update it, like a reopened RocksDB directory.
+#[cfg(feature = "test-util")]
+fn reusable_existing_store(
+    store: &Arc<EngineLocalStore>,
+    requirements: &LocalStoreRequirements<'_>,
+) -> Result<Option<Arc<EngineLocalStore>>, EngineStartError> {
+    if requirements.snapshot.is_some()
+        && lowest_applied_position(store.as_ref(), requirements.partition_count)?.is_none()
+    {
+        tracing::warn!(
+            "a partition of the existing local store applied no batch; restoring the newest snapshot"
+        );
+        return Ok(None);
+    }
+    match find_unreplayable_gap(store.as_ref(), requirements)? {
+        None => Ok(Some(Arc::clone(store))),
+        Some(gap) => {
+            tracing::warn!(gap = %gap, "the retained log cannot update the existing local store; restoring the newest snapshot");
+            Ok(None)
+        }
+    }
+}
+
+/// Restores the newest snapshot into a new in-memory store, or returns an empty store.
+async fn restore_in_memory(
+    object_store: &dyn ObjectStore,
+    requirements: &LocalStoreRequirements<'_>,
+) -> Result<RestoredLocalStore, EngineStartError> {
+    Ok(match requirements.snapshot {
+        Some(snapshot) => {
+            let directory = std::env::temp_dir().join(format!("dexzd-restore-{}", Uuid::now_v7()));
+            let restored = restore_snapshot(
+                object_store,
+                &snapshot.manifest_key,
+                &directory,
+                RocksDbStoreOptions::default(),
+            )
+            .await?;
+            if matches!(restored, RestoredLocalStore::Memory(_))
+                && let Err(error) = std::fs::remove_dir_all(&directory)
+            {
+                tracing::warn!(path = %directory.display(), error = %error, "failed to remove snapshot restore directory");
+            }
+            restored
+        }
+        None => RestoredLocalStore::Memory(InMemoryLocalStore::new()),
+    })
 }
 
 async fn open_rocksdb_store(
