@@ -295,6 +295,7 @@ impl FlowRuntimeRegistry {
                 self.inner.waiters.wake(&flow, change);
             }
         }
+        // Defensive: a close already ended every public wait before retention can start a purge.
         for write in &outcome.writes {
             if let StateWrite::Put {
                 column_family: ColumnFamily::Flow,
