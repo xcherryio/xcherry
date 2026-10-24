@@ -15,7 +15,7 @@ pub(crate) mod command_replies;
 mod command_scope;
 pub(crate) mod flow_close;
 pub(crate) mod flow_data;
-mod flow_start;
+pub(crate) mod flow_start;
 pub(crate) mod run_cursor;
 pub(crate) mod step_commands;
 
@@ -53,6 +53,12 @@ pub(crate) fn apply_command(
     let mut transaction = FlowTransaction::new(state, *context);
     let result = match body {
         Command::FlowStart(start) => flow_start::apply_flow_start(&mut transaction, &scope, start)?,
+        Command::InboxMessage(message) => {
+            crate::cross_flow::apply_inbox_message(&mut transaction, &scope, message)?
+        }
+        Command::RunPurge(purge) => {
+            crate::cross_flow::apply_run_purge(&mut transaction, &scope, purge)?
+        }
         Command::StepAttemptStarted(_)
         | Command::StepAttemptHeartbeat(_)
         | Command::StepAttemptFailed(_)
@@ -127,15 +133,26 @@ fn apply_run_command(
         Command::TimersFired(fired) => {
             step_commands::apply_timers_fired(transaction, cursor, scope, fired)
         }
+        Command::OutboxAck(ack) => {
+            crate::cross_flow::apply_outbox_ack(transaction, cursor, scope, ack)
+        }
+        Command::HardDeleteObjectsDeleted(deleted) => {
+            crate::cross_flow::apply_hard_delete_objects_deleted(
+                transaction,
+                cursor,
+                scope,
+                deleted,
+            )
+        }
         Command::TimerSkip(skip) => {
             crate::steps::wait_conditions::apply_timer_skip(transaction, cursor, scope, skip)
         }
-        Command::RpcCommitted(_)
-        | Command::TimeTravel(_)
-        | Command::InboxMessage(_)
-        | Command::OutboxAck(_)
-        | Command::HardDeleteObjectsDeleted(_)
-        | Command::RunPurge(_) => Ok(HandlerResult::Rejected(unimplemented_reply(scope))),
+        Command::RpcCommitted(_) | Command::TimeTravel(_) => {
+            Ok(HandlerResult::Rejected(unimplemented_reply(scope)))
+        }
+        Command::InboxMessage(_) | Command::RunPurge(_) => Err(ApplyError::InvariantViolation {
+            detail: "cross-Flow command routed to the wrong handler".to_owned(),
+        }),
         Command::FlowStart(_)
         | Command::StepAttemptStarted(_)
         | Command::StepAttemptHeartbeat(_)
