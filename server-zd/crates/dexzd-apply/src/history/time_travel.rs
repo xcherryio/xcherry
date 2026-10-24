@@ -17,7 +17,7 @@ use dexzd_protocol::dex::{
 };
 use dexzd_protocol::dexzd::v1::{
     AttemptRecord, CommandErrorReply, CommandReply, FlowCommand, RetentionTimerId, RunRecord,
-    StepExecutionRecord, StepInvocationKey, StepInvocationPhase, TimeTravelCommand,
+    StepExecutionRecord, StepInvocationKey, StepInvocationPhase, StepMethod, TimeTravelCommand,
     TimeTravelReply, TimerId, TimerRecord, command_reply, flow_command::Command, timer_id,
 };
 use prost::Message;
@@ -397,11 +397,23 @@ fn dispatch_restored_invocations(
                 invocation: key,
                 attempt: invocation.attempt,
                 task_id: invocation.task_id.clone(),
+                method_timeout_seconds: method_timeout_seconds(&step, invocation.method),
             }),
             StepInvocationPhase::Backoff | StepInvocationPhase::Unspecified => {}
         }
     }
     Ok(())
+}
+
+/// Matches `start_attempt`: the method's configured timeout in seconds, or 0 for the default.
+fn method_timeout_seconds(step: &StepExecutionRecord, method: i32) -> i32 {
+    step.options.as_ref().map_or(0, |options| {
+        if method == StepMethod::WaitFor as i32 {
+            options.wait_for_timeout_seconds
+        } else {
+            options.execute_timeout_seconds
+        }
+    })
 }
 
 /// Reapplies input onto the restored state within the TimeTravel command, so its start
