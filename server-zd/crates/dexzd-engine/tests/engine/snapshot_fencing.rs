@@ -9,7 +9,9 @@
 use std::time::Duration;
 
 use dexzd_engine::{LocalStoreConfig, NodeStopReason, SnapshotError};
+use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::SnapshotReference;
+use dexzd_storage::RocksDbStoreOptions;
 
 use crate::harness::TestCluster;
 
@@ -37,7 +39,7 @@ async fn a_stale_snapshot_never_replaces_a_successor_snapshot_after_log_cleanup(
 
     let stale_snapshot = first.node.take_snapshot();
     let takeover = async {
-        cluster.faults.wait_until_delayed_get_entered().await;
+        cluster.faults.wait_until_delayed_operation_entered().await;
         cluster.expire_lease_of("node-a").await;
         assert!(matches!(
             first.node.wait_for_stop().await,
@@ -91,7 +93,7 @@ async fn a_snapshot_is_not_published_after_another_epoch_owns_the_cluster() {
 
     let stale_snapshot = first.node.take_snapshot();
     let newer_epoch = async {
-        cluster.faults.wait_until_delayed_get_entered().await;
+        cluster.faults.wait_until_delayed_operation_entered().await;
         dexzd_cluster_metadata::bump_node_epoch(
             cluster.object_store.as_ref(),
             cluster.clock.as_ref(),
@@ -127,7 +129,7 @@ async fn an_in_flight_snapshot_is_not_published_after_the_node_stops_serving() {
 
     let in_flight_snapshot = first.node.take_snapshot();
     let lease_loss = async {
-        cluster.faults.wait_until_delayed_get_entered().await;
+        cluster.faults.wait_until_delayed_operation_entered().await;
         cluster.expire_lease_of("node-a").await;
         first.node.wait_for_stop().await
     };
@@ -145,4 +147,58 @@ async fn an_in_flight_snapshot_is_not_published_after_the_node_stops_serving() {
             .all(Option::is_none)
     );
     first.node.shutdown().await;
+}
+
+/// Runs in real time: paused time does not advance while the upload's blocking task runs.
+#[tokio::test]
+async fn shutdown_abandons_an_in_flight_snapshot_upload_and_releases_the_lease() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::RocksDb {
+        directory: directory.path().join("store"),
+        options: RocksDbStoreOptions::default(),
+    });
+    config.snapshots.log_threshold_bytes = 1;
+    let first = cluster.start_with(&config).await.expect("node starts");
+    cluster
+        .faults
+        .delay_next_put_under("snapshot/", Duration::from_secs(60));
+    first.commit_prompt("shutdown-flow", 1).await;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        cluster.faults.wait_until_delayed_operation_entered(),
+    )
+    .await
+    .expect("the scheduled snapshot starts uploading");
+
+    tokio::time::timeout(Duration::from_secs(5), first.node.shutdown())
+        .await
+        .expect("shutdown does not wait for the upload");
+    let snapshot_keys = cluster
+        .object_store
+        .list("snapshot/", None, 1000)
+        .await
+        .expect("list snapshots")
+        .objects;
+    assert!(
+        snapshot_keys
+            .iter()
+            .all(|object| !object.key.contains("/manifest/")),
+        "{snapshot_keys:?}"
+    );
+
+    let restart_started = std::time::Instant::now();
+    let successor = cluster.start_with(&config).await.expect("successor starts");
+    assert!(
+        restart_started.elapsed() < Duration::from_secs(3),
+        "the successor takes the released lease without waiting for it to expire"
+    );
+    assert_eq!(successor.committed_count("shutdown-flow").await, 1);
+    let reference = successor
+        .node
+        .take_snapshot()
+        .await
+        .expect("the abandoned upload left the snapshot number usable");
+    assert_eq!(reference.snapshot_number, 1);
+    successor.node.shutdown().await;
 }

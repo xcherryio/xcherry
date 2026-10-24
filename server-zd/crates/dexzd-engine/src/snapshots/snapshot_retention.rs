@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,10 +28,19 @@ pub(crate) struct SnapshotRetention {
     pub(crate) deletion_delay: Duration,
 }
 
-/// A snapshot manifest and its object key.
-pub(crate) struct StoredSnapshot {
-    pub(crate) key: String,
-    pub(crate) manifest: SnapshotManifest,
+/// Decoded snapshot manifests of this node by object key.
+///
+/// Manifests never change, so each one is read at most once per process.
+#[derive(Default)]
+pub(crate) struct SnapshotCatalog {
+    manifests: BTreeMap<String, SnapshotManifest>,
+}
+
+impl SnapshotCatalog {
+    /// Adds a manifest that this process just wrote.
+    pub(crate) fn insert(&mut self, key: String, manifest: SnapshotManifest) {
+        self.manifests.insert(key, manifest);
+    }
 }
 
 impl SnapshotRetention {
@@ -40,82 +49,100 @@ impl SnapshotRetention {
     ///
     /// Snapshots in `referenced_keys` are always kept, and so is every file a kept snapshot
     /// references. Returns the kept snapshots, oldest first.
-    pub(crate) async fn run_once(
+    pub(crate) async fn run_once<'catalog>(
         &self,
+        catalog: &'catalog mut SnapshotCatalog,
         referenced_keys: &BTreeSet<String>,
         fence: &OwnershipFence,
         now_unix_micros: i64,
-    ) -> Result<Vec<StoredSnapshot>, SnapshotError> {
-        let mut snapshots = self.list_snapshots().await?;
-        snapshots.sort_by(|left, right| creation_order(left).cmp(&creation_order(right)));
+    ) -> Result<Vec<&'catalog SnapshotManifest>, SnapshotError> {
+        self.refresh(catalog).await?;
+        let (obsolete_manifests, obsolete_files) =
+            self.find_obsolete(catalog, referenced_keys, now_unix_micros);
+        if !obsolete_manifests.is_empty() {
+            fence.ensure_serving()?;
+            // Files go first, so a retry after a partial failure still finds them through the manifests.
+            for chunk in obsolete_files.chunks(LISTING_PAGE_SIZE as usize) {
+                self.object_store.delete_many(chunk).await?;
+            }
+            for chunk in obsolete_manifests.chunks(LISTING_PAGE_SIZE as usize) {
+                self.object_store.delete_many(chunk).await?;
+            }
+            for key in &obsolete_manifests {
+                catalog.manifests.remove(key);
+            }
+            tracing::info!(
+                manifests = obsolete_manifests.len(),
+                files = obsolete_files.len(),
+                "deleted snapshots beyond the retained count"
+            );
+        }
+        let catalog: &'catalog SnapshotCatalog = catalog;
+        let mut kept: Vec<&SnapshotManifest> = catalog.manifests.values().collect();
+        kept.sort_by(|left, right| creation_order(left).cmp(&creation_order(right)));
+        Ok(kept)
+    }
+
+    /// Returns the manifest keys to delete and the files that only those manifests reference.
+    fn find_obsolete(
+        &self,
+        catalog: &SnapshotCatalog,
+        referenced_keys: &BTreeSet<String>,
+        now_unix_micros: i64,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut snapshots: Vec<(&String, &SnapshotManifest)> = catalog.manifests.iter().collect();
+        snapshots.sort_by(|left, right| creation_order(left.1).cmp(&creation_order(right.1)));
         let delay_micros = i64::try_from(self.deletion_delay.as_micros()).unwrap_or(i64::MAX);
         let displaced_count = snapshots.len().saturating_sub(self.retained_count);
         let is_removable: Vec<bool> = snapshots
             .iter()
             .enumerate()
-            .map(|(index, snapshot)| {
+            .map(|(index, (key, _))| {
                 index < displaced_count
-                    && !referenced_keys.contains(&snapshot.key)
+                    && !referenced_keys.contains(*key)
                     && now_unix_micros.saturating_sub(
                         snapshots[index + self.retained_count]
-                            .manifest
+                            .1
                             .created_at_unix_micros,
                     ) >= delay_micros
             })
             .collect();
-        let (removed, kept): (Vec<_>, Vec<_>) = snapshots
-            .into_iter()
-            .zip(is_removable)
-            .partition(|(_, is_removable)| *is_removable);
-        let kept: Vec<StoredSnapshot> = kept.into_iter().map(|(snapshot, _)| snapshot).collect();
-        if removed.is_empty() {
-            return Ok(kept);
-        }
-        let kept_files: BTreeSet<&str> = kept
+        let kept_files: BTreeSet<&str> = snapshots
             .iter()
-            .flat_map(|snapshot| &snapshot.manifest.files)
+            .zip(&is_removable)
+            .filter(|(_, is_removable)| !**is_removable)
+            .flat_map(|((_, manifest), _)| &manifest.files)
             .map(|file| file.object_key.as_str())
             .collect();
-        let obsolete_files: Vec<String> = removed
+        let removed: Vec<(&String, &SnapshotManifest)> = snapshots
             .iter()
-            .flat_map(|(snapshot, _)| &snapshot.manifest.files)
+            .zip(&is_removable)
+            .filter(|(_, is_removable)| **is_removable)
+            .map(|(snapshot, _)| *snapshot)
+            .collect();
+        let obsolete_files: BTreeSet<&str> = removed
+            .iter()
+            .flat_map(|(_, manifest)| &manifest.files)
             .map(|file| file.object_key.as_str())
             .filter(|key| !kept_files.contains(key))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(str::to_owned)
             .collect();
-        let obsolete_manifests: Vec<String> = removed
-            .into_iter()
-            .map(|(snapshot, _)| snapshot.key)
-            .collect();
-        fence.ensure_serving()?;
-        // Files go first, so a retry after a partial failure still finds them through the manifests.
-        for chunk in obsolete_files.chunks(LISTING_PAGE_SIZE as usize) {
-            self.object_store.delete_many(chunk).await?;
-        }
-        for chunk in obsolete_manifests.chunks(LISTING_PAGE_SIZE as usize) {
-            self.object_store.delete_many(chunk).await?;
-        }
-        tracing::info!(
-            manifests = obsolete_manifests.len(),
-            files = obsolete_files.len(),
-            "deleted snapshots beyond the retained count"
-        );
-        Ok(kept)
+        (
+            removed.iter().map(|(key, _)| (*key).clone()).collect(),
+            obsolete_files.into_iter().map(str::to_owned).collect(),
+        )
     }
 
-    /// Lists and decodes every snapshot manifest of this node, in any lineage.
-    async fn list_snapshots(&self) -> Result<Vec<StoredSnapshot>, SnapshotError> {
+    /// Reconciles the catalog with a listing and reads only manifests it has not seen.
+    async fn refresh(&self, catalog: &mut SnapshotCatalog) -> Result<(), SnapshotError> {
         let prefix = format!("snapshot/{}/", self.node_id);
-        let mut manifest_keys = Vec::new();
+        let mut listed_keys = BTreeSet::new();
         let mut start_after = None;
         loop {
             let page = self
                 .object_store
                 .list(&prefix, start_after.as_deref(), LISTING_PAGE_SIZE)
                 .await?;
-            manifest_keys.extend(
+            listed_keys.extend(
                 page.objects
                     .into_iter()
                     .map(|object| object.key)
@@ -126,17 +153,20 @@ impl SnapshotRetention {
                 None => break,
             }
         }
-        let mut snapshots = Vec::with_capacity(manifest_keys.len());
-        for key in manifest_keys {
+        catalog.manifests.retain(|key, _| listed_keys.contains(key));
+        for key in listed_keys {
+            if catalog.manifests.contains_key(&key) {
+                continue;
+            }
             // A concurrent cleanup may have deleted it after the listing.
             let Some(content) = self.object_store.get(&key).await? else {
                 continue;
             };
             let manifest = SnapshotManifest::decode(content.bytes)?;
             self.validate(&key, &manifest)?;
-            snapshots.push(StoredSnapshot { key, manifest });
+            catalog.manifests.insert(key, manifest);
         }
-        Ok(snapshots)
+        Ok(())
     }
 
     /// Rejects a manifest whose deletion could remove objects outside this node's snapshots.
@@ -160,10 +190,10 @@ impl SnapshotRetention {
     }
 }
 
-fn creation_order(snapshot: &StoredSnapshot) -> (i64, &[u8], u64) {
+fn creation_order(manifest: &SnapshotManifest) -> (i64, &[u8], u64) {
     (
-        snapshot.manifest.created_at_unix_micros,
-        &snapshot.manifest.lineage_id,
-        snapshot.manifest.snapshot_number,
+        manifest.created_at_unix_micros,
+        &manifest.lineage_id,
+        manifest.snapshot_number,
     )
 }

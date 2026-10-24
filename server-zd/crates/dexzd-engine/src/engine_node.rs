@@ -36,7 +36,8 @@ use crate::recovery::{
     LocalStoreRequirements, LogReplay, open_local_store,
 };
 use crate::snapshots::{
-    LogCleanup, OwnershipFence, SnapshotConfig, SnapshotError, SnapshotRetention, SnapshotService,
+    LogCleanup, OwnershipFence, SnapshotCatalog, SnapshotConfig, SnapshotError, SnapshotRetention,
+    SnapshotService,
 };
 
 /// Configuration sections of an engine node.
@@ -250,7 +251,8 @@ impl EngineNode {
             epoch,
             node_meta_lock,
             config: config.snapshots.clone(),
-            snapshot_lock: tokio::sync::Mutex::new(()),
+            catalog: tokio::sync::Mutex::new(SnapshotCatalog::default()),
+            last_snapshot_routed_seq: AtomicU64::new(0),
         });
         tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
         tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");

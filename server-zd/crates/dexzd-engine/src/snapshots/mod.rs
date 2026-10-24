@@ -13,12 +13,13 @@ mod ownership_fence;
 mod snapshot_config;
 mod snapshot_retention;
 mod snapshot_service;
+mod snapshot_upload_store;
 
 pub use snapshot_config::SnapshotConfig;
 
 pub(crate) use log_cleanup::LogCleanup;
 pub(crate) use ownership_fence::OwnershipFence;
-pub(crate) use snapshot_retention::SnapshotRetention;
+pub(crate) use snapshot_retention::{SnapshotCatalog, SnapshotRetention};
 pub(crate) use snapshot_service::SnapshotService;
 
 /// A snapshot or cleanup step failed; the service retries later.

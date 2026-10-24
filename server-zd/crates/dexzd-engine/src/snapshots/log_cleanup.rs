@@ -17,7 +17,6 @@ use dexzd_protocol::dexzd::v1::{Manifest, SnapshotManifest};
 
 use crate::snapshots::SnapshotError;
 use crate::snapshots::ownership_fence::OwnershipFence;
-use crate::snapshots::snapshot_retention::StoredSnapshot;
 
 const LISTING_PAGE_SIZE: u32 = 1000;
 
@@ -48,7 +47,7 @@ impl LogCleanup {
     /// recovery restores, so the bound never passes it.
     pub(crate) async fn run_once(
         &self,
-        snapshots: &[StoredSnapshot],
+        snapshots: &[&SnapshotManifest],
         published: &SnapshotManifest,
         fence: &OwnershipFence,
     ) -> Result<Option<u64>, SnapshotError> {
@@ -75,7 +74,7 @@ impl LogCleanup {
     /// the published snapshot.
     fn covered_position(
         &self,
-        snapshots: &[StoredSnapshot],
+        snapshots: &[&SnapshotManifest],
         published: &SnapshotManifest,
     ) -> Option<CoveredPosition> {
         let delay_micros = i64::try_from(self.deletion_delay.as_micros()).unwrap_or(i64::MAX);
@@ -83,7 +82,6 @@ impl LogCleanup {
         let old_enough = snapshots
             .iter()
             .rev()
-            .map(|snapshot| &snapshot.manifest)
             .filter(|manifest| manifest.created_at_unix_micros <= newest_allowed_micros)
             .find_map(|manifest| self.lowest_applied_position(manifest))?;
         Some(old_enough.min(self.lowest_applied_position(published)?))

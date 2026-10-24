@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dexzd_engine::LocalStoreConfig;
-use dexzd_object_store::ObjectStore;
+use dexzd_object_store::{ObjectStore, ObjectStoreOperation};
 use dexzd_protocol::dexzd::v1::SnapshotManifest;
 use prost::Message;
 
@@ -93,6 +93,22 @@ async fn snapshots_start_after_the_log_threshold_or_the_interval() {
     assert!(snapshot_manifest_keys(&cluster).await.is_empty());
     tokio::time::sleep(Duration::from_secs(61)).await;
     assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
+
+    // Nothing committed since that snapshot, so later intervals write nothing.
+    let snapshot_writes = || {
+        cluster
+            .faults
+            .count_operations(ObjectStoreOperation::Put, |key| {
+                key.starts_with("snapshot/") || key == "manifest"
+            })
+    };
+    let writes_after_first_snapshot = snapshot_writes();
+    tokio::time::sleep(Duration::from_secs(35 * 60)).await;
+    assert_eq!(snapshot_writes(), writes_after_first_snapshot);
+    assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
+    test.commit_prompt("idle-flow", 1).await;
+    tokio::time::sleep(Duration::from_secs(10 * 60 + 2)).await;
+    assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 2);
     test.node.shutdown().await;
 }
 
@@ -251,4 +267,25 @@ async fn retention_reclaims_the_lineage_that_a_restore_replaced() {
         3 + retained_count as u64
     );
     restarted.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_snapshot_reads_each_stored_snapshot_manifest_at_most_once() {
+    let mut cluster = TestCluster::new();
+    let test = cluster.start_in_memory().await;
+    for _ in 0..4 {
+        test.commit_prompt("catalog-flow", 1).await;
+        test.node.take_snapshot().await.expect("snapshot succeeds");
+    }
+    let manifest_reads = || {
+        cluster
+            .faults
+            .count_operations(ObjectStoreOperation::Get, |key| key.contains("/manifest/"))
+    };
+    let reads_before = manifest_reads();
+    test.commit_prompt("catalog-flow", 1).await;
+    test.node.take_snapshot().await.expect("snapshot succeeds");
+    assert_eq!(manifest_reads(), reads_before);
+    assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 5);
+    test.node.shutdown().await;
 }

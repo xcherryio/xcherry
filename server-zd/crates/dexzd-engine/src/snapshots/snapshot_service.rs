@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::ManifestChange;
@@ -22,7 +22,8 @@ use tokio_util::sync::CancellationToken;
 use crate::commit::{CommitProgress, EngineLocalStore, PartitionApplierPool};
 use crate::snapshots::log_cleanup::LogCleanup;
 use crate::snapshots::ownership_fence::OwnershipFence;
-use crate::snapshots::snapshot_retention::SnapshotRetention;
+use crate::snapshots::snapshot_retention::{SnapshotCatalog, SnapshotRetention};
+use crate::snapshots::snapshot_upload_store::SnapshotUploadStore;
 use crate::snapshots::{SnapshotConfig, SnapshotError};
 
 /// Takes snapshots on schedule, records them in the manifest, and cleans up old objects.
@@ -40,7 +41,10 @@ pub(crate) struct SnapshotService {
     pub(crate) epoch: u64,
     pub(crate) node_meta_lock: Arc<std::sync::Mutex<()>>,
     pub(crate) config: SnapshotConfig,
-    pub(crate) snapshot_lock: Mutex<()>,
+    /// Serializes snapshots and holds the manifests retention has read.
+    pub(crate) catalog: Mutex<SnapshotCatalog>,
+    /// Routed seq that the last successful snapshot covered; 0 before the first one.
+    pub(crate) last_snapshot_routed_seq: AtomicU64,
 }
 
 impl SnapshotService {
@@ -64,7 +68,7 @@ impl SnapshotService {
                     || committed_bytes.saturating_sub(bytes_at_last_snapshot)
                         >= self.config.log_threshold_bytes
             };
-            if !is_due {
+            if !is_due || !self.has_unsnapshotted_batches() {
                 continue;
             }
             last_attempt = Instant::now();
@@ -86,7 +90,7 @@ impl SnapshotService {
     /// Nothing is published or deleted once the node stops serving or another epoch owns the
     /// cluster.
     pub(crate) async fn take_snapshot(&self) -> Result<SnapshotReference, SnapshotError> {
-        let _serialized = self.snapshot_lock.lock().await;
+        let mut catalog = self.catalog.lock().await;
         self.fence.ensure_serving()?;
         let stream = &self.log_cleanup.stream;
         let last_routed_seq = self.progress.last_routed_seq.load(Ordering::Acquire);
@@ -105,6 +109,7 @@ impl SnapshotService {
         }
         let started = Instant::now();
         let (manifest_key, manifest) = self.upload_snapshot().await?;
+        catalog.insert(manifest_key.clone(), manifest.clone());
         let reference = SnapshotReference {
             node_id: stream.node_id.clone(),
             lineage_id: manifest.lineage_id.clone(),
@@ -124,9 +129,16 @@ impl SnapshotService {
             .filter_map(|partition| partition.snapshot.as_ref())
             .map(|snapshot| snapshot.manifest_key.clone())
             .collect();
+        self.last_snapshot_routed_seq
+            .store(last_routed_seq, Ordering::Release);
         let retained = self
             .retention
-            .run_once(&referenced_keys, &self.fence, self.clock.now_unix_micros())
+            .run_once(
+                &mut catalog,
+                &referenced_keys,
+                &self.fence,
+                self.clock.now_unix_micros(),
+            )
             .await?;
         self.log_cleanup
             .run_once(&retained, &manifest, &self.fence)
@@ -136,7 +148,8 @@ impl SnapshotService {
 
     async fn upload_snapshot(&self) -> Result<(String, SnapshotManifest), SnapshotError> {
         let store = self.store.clone();
-        let object_store = self.object_store.clone();
+        let upload_store =
+            SnapshotUploadStore::new(self.object_store.clone(), self.fence.state.clone());
         let identity = SnapshotIdentity {
             cluster_id: self.cluster_id,
             node_id: self.log_cleanup.stream.node_id.clone(),
@@ -157,19 +170,20 @@ impl SnapshotService {
             runtime.block_on(async {
                 match store.as_ref() {
                     RestoredLocalStore::RocksDb(rocks) => {
-                        create_snapshot(rocks, object_store.as_ref(), &identity, snapshot_number)
-                            .await
+                        create_snapshot(rocks, &upload_store, &identity, snapshot_number).await
                     }
                     RestoredLocalStore::Memory(memory) => {
-                        create_snapshot(memory, object_store.as_ref(), &identity, snapshot_number)
-                            .await
+                        create_snapshot(memory, &upload_store, &identity, snapshot_number).await
                     }
                 }
             })
         })
         .await
         .map_err(|error| SnapshotError::Invalid(error.to_string()))?
-        .map_err(SnapshotError::from)
+        .map_err(|error| match self.fence.state.stop_reason() {
+            Some(_) => SnapshotError::NodeStopped,
+            None => SnapshotError::from(error),
+        })
     }
 
     async fn record_snapshot(
@@ -188,6 +202,12 @@ impl SnapshotService {
                 change
             })
             .await
+    }
+
+    /// Returns whether a batch was routed after the last successful snapshot.
+    fn has_unsnapshotted_batches(&self) -> bool {
+        self.progress.last_routed_seq.load(Ordering::Acquire)
+            != self.last_snapshot_routed_seq.load(Ordering::Acquire)
     }
 
     fn committed_log_bytes(&self) -> u64 {

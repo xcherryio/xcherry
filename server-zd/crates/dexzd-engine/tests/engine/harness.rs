@@ -253,15 +253,24 @@ impl PartitionRuntimeRebuilder for RecordingRuntime {
     }
 }
 
+/// One armed delay: the next `operation` on a key that `matches_prefix` or equals `key`.
+struct DelayedOperation {
+    operation: ObjectStoreOperation,
+    key: String,
+    matches_prefix: bool,
+    delay: Duration,
+}
+
 /// Fails writes under a key prefix, fails writes of one key after some succeed, or delays one
-/// read of a key, once switched on.
+/// operation, once switched on. Records every operation it sees.
 #[derive(Default)]
 pub(crate) struct SwitchableFaults {
     failing_put_prefix: Mutex<Option<String>>,
     /// Key whose writes fail once the remaining count of allowed writes is zero.
     limited_put: Mutex<Option<(String, usize)>>,
-    delayed_get: Mutex<Option<(String, Duration)>>,
-    delayed_get_entered: Notify,
+    delayed: Mutex<Option<DelayedOperation>>,
+    delayed_entered: Notify,
+    operations: Mutex<Vec<(ObjectStoreOperation, String)>>,
 }
 
 impl SwitchableFaults {
@@ -277,29 +286,71 @@ impl SwitchableFaults {
     pub(crate) fn clear(&self) {
         *self.failing_put_prefix.lock().expect("fault lock") = None;
         *self.limited_put.lock().expect("fault lock") = None;
-        *self.delayed_get.lock().expect("fault lock") = None;
+        *self.delayed.lock().expect("fault lock") = None;
     }
 
-    /// Delays the next read of exactly `key` by `delay` of paused time.
+    /// Delays the next read of exactly `key` by `delay`.
     pub(crate) fn delay_next_get_of(&self, key: &str, delay: Duration) {
-        *self.delayed_get.lock().expect("fault lock") = Some((key.to_owned(), delay));
+        self.arm_delay(ObjectStoreOperation::Get, key, false, delay);
     }
 
-    /// Waits until the read armed by [`Self::delay_next_get_of`] starts waiting.
-    pub(crate) async fn wait_until_delayed_get_entered(&self) {
-        self.delayed_get_entered.notified().await;
+    /// Delays the next write of a key under `prefix` by `delay`.
+    pub(crate) fn delay_next_put_under(&self, prefix: &str, delay: Duration) {
+        self.arm_delay(ObjectStoreOperation::Put, prefix, true, delay);
+    }
+
+    /// Waits until the operation armed by a `delay_next_*` call starts waiting.
+    pub(crate) async fn wait_until_delayed_operation_entered(&self) {
+        self.delayed_entered.notified().await;
+    }
+
+    /// Counts recorded operations of one kind whose key satisfies `is_counted`.
+    pub(crate) fn count_operations(
+        &self,
+        operation: ObjectStoreOperation,
+        is_counted: impl Fn(&str) -> bool,
+    ) -> usize {
+        self.operations
+            .lock()
+            .expect("fault lock")
+            .iter()
+            .filter(|(recorded, key)| *recorded == operation && is_counted(key))
+            .count()
+    }
+
+    fn arm_delay(
+        &self,
+        operation: ObjectStoreOperation,
+        key: &str,
+        matches_prefix: bool,
+        delay: Duration,
+    ) {
+        *self.delayed.lock().expect("fault lock") = Some(DelayedOperation {
+            operation,
+            key: key.to_owned(),
+            matches_prefix,
+            delay,
+        });
     }
 }
 
 impl FaultInjector for SwitchableFaults {
     fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
-        if operation == ObjectStoreOperation::Get {
-            let mut delayed = self.delayed_get.lock().expect("fault lock");
-            if let Some((_, delay)) = delayed.take_if(|(delayed_key, _)| delayed_key == key) {
-                self.delayed_get_entered.notify_one();
-                return FaultAction::Delay(delay);
-            }
-            return FaultAction::Proceed;
+        self.operations
+            .lock()
+            .expect("fault lock")
+            .push((operation, key.to_owned()));
+        let armed = self.delayed.lock().expect("fault lock").take_if(|delayed| {
+            delayed.operation == operation
+                && if delayed.matches_prefix {
+                    key.starts_with(&delayed.key)
+                } else {
+                    key == delayed.key
+                }
+        });
+        if let Some(delayed) = armed {
+            self.delayed_entered.notify_one();
+            return FaultAction::Delay(delayed.delay);
         }
         if operation != ObjectStoreOperation::Put {
             return FaultAction::Proceed;
