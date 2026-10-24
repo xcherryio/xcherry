@@ -113,6 +113,7 @@ message NodeLease {
   uint64 epoch = 3;
   // Random ID of the process that holds the lease.
   string holder_process_id = 4;
+  // The minimum int64 value means the lease was released.
   int64 expires_at_unix_micros = 5;
   int64 duration_micros = 6;
   // Increases by one on every renewal, for ABA detection.
