@@ -8,7 +8,7 @@
 
 use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::RunId;
-use dexzd_protocol::dex::StepDurability;
+use dexzd_protocol::dex::{PullRouting, StepDurability};
 use dexzd_protocol::dexzd::v1::{
     CommandReply, FlowCommand, StepAttemptStartedCommand, StepInvocationKey, StepInvocationPhase,
     command_reply, flow_command,
@@ -63,6 +63,7 @@ impl EffectRuntime for FlowRuntimeRegistry {
         invocation: &'a StepInvocationKey,
         attempt: u32,
         task_id: Vec<u8>,
+        pull_routing: PullRouting,
     ) -> BoxFuture<'a, Result<InvocationStartOutcome, EffectRuntimeError>> {
         Box::pin(async move {
             let run = RunLocation {
@@ -87,6 +88,7 @@ impl EffectRuntime for FlowRuntimeRegistry {
                         invocation: Some(invocation.clone()),
                         attempt,
                         task_id,
+                        pull_routing: Some(pull_routing),
                     },
                 )),
                 ..FlowCommand::default()
