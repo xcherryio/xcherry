@@ -17,6 +17,7 @@ dexzd-log.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
 dexzd-storage.workspace = true
+prost.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 thiserror.workspace = true
