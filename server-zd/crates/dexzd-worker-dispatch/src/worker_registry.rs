@@ -15,10 +15,9 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dexzd_clock::WallClock;
-use dexzd_metrics::NodeMetrics;
+use dexzd_metrics::{NodeMetrics, WorkerStreamEvent};
 use dexzd_protocol::dex::{
-    self, DispatchTaskErrorReason, InvokeExecuteMethodRequest, InvokeWaitForMethodRequest,
-    InvokeWorkerRpcRequest, PollWorkerTask, PollWorkerTaskCancelTask, PollWorkerTaskFrame,
+    self, DispatchTaskErrorReason, PollWorkerTask, PollWorkerTaskCancelTask, PollWorkerTaskFrame,
     PollWorkerTaskPing, PollWorkerTaskReconnect, PollWorkerTaskRegister, PollWorkerTaskRegistered,
     PollWorkerTaskRejectReason, PollWorkerTaskRequest, PollWorkerTaskResponse, poll_worker_task,
     poll_worker_task_frame, poll_worker_task_request, poll_worker_task_response,
@@ -32,42 +31,12 @@ use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
 use crate::MatchingConfig;
+mod dispatch_request;
 mod queue_state;
 mod worker_protocol;
+pub use dispatch_request::{DispatchRequest, DispatchTaskPayload};
 use queue_state::QueuedTaskMetric;
 pub use worker_protocol::WorkerTaskService;
-
-/// The unmodified Worker request carried by a pull task.
-#[derive(Debug, Clone)]
-pub enum DispatchTaskPayload {
-    /// Runs a Step's WaitFor method.
-    WaitFor(InvokeWaitForMethodRequest),
-    /// Runs a Step's Execute method.
-    Execute(InvokeExecuteMethodRequest),
-    /// Invokes a Worker RPC.
-    Rpc(InvokeWorkerRpcRequest),
-}
-
-/// Inputs for one server-generated pull task.
-#[derive(Debug, Clone)]
-pub struct DispatchRequest {
-    /// Tenant containing the Flow and its Worker queues; use zero for the default tenant.
-    pub tenant_id: u64,
-    /// Flow instance ID used for same-Flow affinity.
-    pub flow_id: String,
-    /// Flow type queue used after an optional sticky Worker search.
-    pub flow_type: String,
-    /// Worker process ID preferred while the sticky wait lasts.
-    pub sticky_app_worker_id: Option<String>,
-    /// Worker request sent without modifying its application payload.
-    pub payload: DispatchTaskPayload,
-    /// Method deadline, including Worker processing time.
-    pub deadline: SystemTime,
-    /// Override for the 5-second sticky wait; zero skips the sticky search.
-    pub sticky_wait: Option<Duration>,
-    /// Override for the 10-second total Worker search.
-    pub dispatch_wait: Option<Duration>,
-}
 
 /// One ordered frame from the Worker, an assignment change, or the terminal dispatch outcome.
 #[derive(Debug)]
@@ -258,6 +227,15 @@ impl WorkerDispatch {
 
     /// Starts one dispatch; its handle emits Worker frames in order and exactly one outcome.
     pub fn dispatch(&self, request: DispatchRequest) -> Result<DispatchHandle, Status> {
+        self.dispatch_with_schedule(request, None)
+    }
+
+    /// Starts one dispatch and records latency from a committed Step schedule time.
+    pub fn dispatch_with_schedule(
+        &self,
+        request: DispatchRequest,
+        scheduled_at: Option<Instant>,
+    ) -> Result<DispatchHandle, Status> {
         validate_dispatch(&request, &self.inner.config, self.inner.clock.as_ref())?;
         if self
             .inner
@@ -272,7 +250,9 @@ impl WorkerDispatch {
         let (cancel, cancel_rx) = watch::channel(false);
         let dispatch = self.clone();
         let task = tokio::spawn(async move {
-            let outcome = dispatch.run_dispatch(request, &events_tx, cancel_rx).await;
+            let outcome = dispatch
+                .run_dispatch(request, scheduled_at, &events_tx, cancel_rx)
+                .await;
             if events_tx
                 .send(DispatchEvent::Completed(outcome))
                 .await
@@ -302,6 +282,7 @@ impl WorkerDispatch {
     async fn run_dispatch(
         &self,
         request: DispatchRequest,
+        mut scheduled_at: Option<Instant>,
         events: &mpsc::Sender<DispatchEvent>,
         mut cancel: watch::Receiver<bool>,
     ) -> DispatchOutcome {
@@ -341,6 +322,7 @@ impl WorkerDispatch {
                     &mut capacity_backoffs,
                     &mut unavailable,
                     &mut unknown,
+                    &mut scheduled_at,
                 )
                 .await
         {
@@ -361,6 +343,7 @@ impl WorkerDispatch {
                 &mut capacity_backoffs,
                 &mut unavailable,
                 &mut unknown,
+                &mut scheduled_at,
             )
             .await
         {
@@ -400,6 +383,7 @@ impl WorkerDispatch {
         capacity_backoffs: &mut HashMap<Uuid, Duration>,
         unavailable: &mut bool,
         unknown: &mut bool,
+        scheduled_at: &mut Option<Instant>,
     ) -> Option<DispatchOutcome> {
         let _queue_lease = self.acquire_queue(request.tenant_id, queue_name);
         let mut queued_task =
@@ -439,6 +423,16 @@ impl WorkerDispatch {
                     continue;
                 }
                 queued_task.set_waiting(false);
+                self.inner
+                    .metrics
+                    .worker_stream_events
+                    .record(WorkerStreamEvent::Delivered);
+                if let Some(when_scheduled) = scheduled_at.take() {
+                    self.inner
+                        .metrics
+                        .step_schedule_to_start_latency
+                        .observe(when_scheduled.elapsed().as_secs_f64());
+                }
                 let assigned = DispatchEvent::Assigned {
                     app_worker_id: worker.app_worker_id.clone(),
                 };
@@ -831,6 +825,10 @@ impl WorkerDispatch {
         let Some(worker) = registry.streams.remove(&id) else {
             return;
         };
+        self.inner
+            .metrics
+            .worker_stream_events
+            .record(WorkerStreamEvent::Closed);
         self.inner.metrics.matching_worker_streams.dec();
         let worker_key = (worker.tenant_id, worker.app_worker_id.clone());
         if let Some(count) = registry.worker_counts.get_mut(&worker_key) {

@@ -244,6 +244,8 @@ impl EngineNode {
             );
             let appliers = Arc::new(PartitionApplierPool::start(
                 FrameApplier {
+                    metrics: metrics.clone(),
+                    metrics_enabled: std::sync::atomic::AtomicBool::new(false),
                     store: store.clone(),
                     applier,
                     hasher: metadata.cluster.partition_hasher.clone(),
@@ -274,6 +276,8 @@ impl EngineNode {
             }
             .run()
             .await?;
+            // Recovery uses these applier lanes; only later frames are live commits.
+            appliers.enable_metrics();
             committer.seed_stamp_watermarks(&applied_command_timestamps(&store)?);
             let (pipeline, committed_batches) = CommitPipeline::start_with_metrics(
                 object_store.clone(),

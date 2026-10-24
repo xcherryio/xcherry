@@ -12,6 +12,8 @@ use prometheus_client::encoding::{EncodeLabelSet, EncodeMetric, MetricEncoder};
 use prometheus_client::metrics::MetricType;
 use prometheus_client::metrics::counter::Counter;
 
+use crate::histogram::{API_LATENCY_BOUNDS, AtomicHistogram};
+
 /// Fixed class of a public gRPC method.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum RpcClass {
@@ -38,6 +40,13 @@ impl RpcClass {
         Self::WorkerRespond,
     ];
 
+    const UNARY: [Self; 4] = [
+        Self::FlowWrite,
+        Self::FlowRead,
+        Self::Search,
+        Self::WorkerRespond,
+    ];
+
     const fn index(self) -> usize {
         match self {
             Self::FlowWrite => 0,
@@ -46,6 +55,55 @@ impl RpcClass {
             Self::WorkerPoll => 3,
             Self::WorkerRespond => 4,
         }
+    }
+}
+
+#[derive(Clone, Debug, EncodeLabelSet)]
+struct RequestClassLabel {
+    rpc_class: RpcClass,
+}
+
+/// Fixed unary request latency histograms by RPC class.
+#[derive(Clone, Debug)]
+pub struct ApiLatency {
+    histograms: Arc<[AtomicHistogram<6>; 4]>,
+}
+
+impl Default for ApiLatency {
+    fn default() -> Self {
+        Self {
+            histograms: Arc::new(std::array::from_fn(|_| {
+                AtomicHistogram::new(&API_LATENCY_BOUNDS)
+            })),
+        }
+    }
+}
+
+impl ApiLatency {
+    /// Records one completed unary request; Worker poll streams are excluded.
+    pub fn observe(&self, rpc_class: RpcClass, seconds: f64) {
+        let index = match rpc_class {
+            RpcClass::FlowWrite => 0,
+            RpcClass::FlowRead => 1,
+            RpcClass::Search => 2,
+            RpcClass::WorkerPoll => return,
+            RpcClass::WorkerRespond => 3,
+        };
+        self.histograms[index].observe(seconds);
+    }
+}
+
+impl EncodeMetric for ApiLatency {
+    fn encode(&self, mut encoder: MetricEncoder) -> Result<(), std::fmt::Error> {
+        for (index, rpc_class) in RpcClass::UNARY.into_iter().enumerate() {
+            self.histograms[index]
+                .encode(encoder.encode_family(&RequestClassLabel { rpc_class })?)?;
+        }
+        Ok(())
+    }
+
+    fn metric_type(&self) -> MetricType {
+        MetricType::Histogram
     }
 }
 

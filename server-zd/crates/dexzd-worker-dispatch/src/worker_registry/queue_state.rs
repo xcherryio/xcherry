@@ -116,6 +116,7 @@ impl QueueState {
 mod tests {
     use super::*;
     use dexzd_clock::SystemWallClock;
+    use dexzd_protocol::dex::InvokeWaitForMethodRequest;
 
     #[tokio::test]
     async fn empty_queue_leases_and_absent_sticky_queues_are_removed() {

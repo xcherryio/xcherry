@@ -51,6 +51,7 @@ pub(crate) async fn rebuild_partition(
             flow,
             effects,
             is_committed: true,
+            scheduled_at: None,
         });
     }
     tracing::info!(%partition, effect_count, "rebuilt partition effects");

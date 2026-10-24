@@ -204,6 +204,7 @@ pub(crate) enum RouterMessage {
         flow: FlowAddress,
         effects: Vec<ApplyEffect>,
         is_committed: bool,
+        scheduled_at: Option<std::time::Instant>,
     },
     RebuildPartition {
         partition: PartitionId,
@@ -411,6 +412,7 @@ impl RuntimeEffectSink for EffectRunner {
             flow: flow.clone(),
             effects: effects.to_vec(),
             is_committed,
+            scheduled_at: is_committed.then(std::time::Instant::now),
         };
         if self.router.send(message).is_err() {
             tracing::debug!("effect runner stopped; effects are rebuilt after restart");
@@ -530,9 +532,10 @@ impl EffectRouter {
                 flow,
                 effects,
                 is_committed,
+                scheduled_at,
             } => {
                 for effect in effects {
-                    self.route_effect(&flow, effect, is_committed);
+                    self.route_effect(&flow, effect, is_committed, scheduled_at);
                 }
             }
             RouterMessage::RebuildPartition { partition, reply } => {
@@ -559,7 +562,13 @@ impl EffectRouter {
         }
     }
 
-    fn route_effect(&mut self, flow: &FlowAddress, effect: ApplyEffect, is_committed: bool) {
+    fn route_effect(
+        &mut self,
+        flow: &FlowAddress,
+        effect: ApplyEffect,
+        is_committed: bool,
+        scheduled_at: Option<std::time::Instant>,
+    ) {
         match effect {
             ApplyEffect::InvocationPending {
                 run_id,
@@ -584,6 +593,7 @@ impl EffectRouter {
                     key,
                     task_id,
                     method_timeout_seconds,
+                    scheduled_at,
                 );
             }
             ApplyEffect::InvocationCanceled { task_id, .. } => {

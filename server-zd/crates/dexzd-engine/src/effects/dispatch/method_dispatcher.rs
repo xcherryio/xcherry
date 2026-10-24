@@ -9,7 +9,7 @@
 //! The Worker transport behind method dispatch: pull Worker matching in production, a scripted
 //! fake in tests.
 
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use dexzd_worker_dispatch::{
     DispatchEvent, DispatchHandle, DispatchRequest, DispatchTaskPayload, WorkerDispatch,
@@ -59,6 +59,15 @@ pub trait MethodDispatcher: Send + Sync + 'static {
         &self,
         request: MethodDispatchRequest,
     ) -> Result<Box<dyn MethodDispatchSession>, MethodDispatchStartError>;
+
+    /// Starts a dispatch with the committed task's schedule time when available.
+    fn dispatch_scheduled(
+        &self,
+        request: MethodDispatchRequest,
+        _scheduled_at: Option<Instant>,
+    ) -> Result<Box<dyn MethodDispatchSession>, MethodDispatchStartError> {
+        self.dispatch(request)
+    }
 }
 
 impl MethodDispatcher for WorkerDispatch {
@@ -66,11 +75,19 @@ impl MethodDispatcher for WorkerDispatch {
         &self,
         request: MethodDispatchRequest,
     ) -> Result<Box<dyn MethodDispatchSession>, MethodDispatchStartError> {
+        self.dispatch_scheduled(request, None)
+    }
+
+    fn dispatch_scheduled(
+        &self,
+        request: MethodDispatchRequest,
+        scheduled_at: Option<Instant>,
+    ) -> Result<Box<dyn MethodDispatchSession>, MethodDispatchStartError> {
         let payload = match request.request {
             MethodRequest::WaitFor(request) => DispatchTaskPayload::WaitFor(request),
             MethodRequest::Execute(request) => DispatchTaskPayload::Execute(request),
         };
-        let handle = WorkerDispatch::dispatch(
+        let handle = WorkerDispatch::dispatch_with_schedule(
             self,
             DispatchRequest {
                 tenant_id: request.tenant_id,
@@ -82,6 +99,7 @@ impl MethodDispatcher for WorkerDispatch {
                 sticky_wait: None,
                 dispatch_wait: None,
             },
+            scheduled_at,
         )
         .map_err(|status| MethodDispatchStartError {
             detail: status.message().to_owned(),

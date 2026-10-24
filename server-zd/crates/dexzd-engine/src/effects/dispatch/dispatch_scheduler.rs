@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use dexzd_keyspace::RunId;
 use dexzd_protocol::dex::PullRouting;
@@ -125,6 +126,7 @@ impl DispatchScheduler {
         key: MethodAttemptKey,
         task_id: Vec<u8>,
         method_timeout_seconds: i32,
+        scheduled_at: Option<Instant>,
     ) {
         let attempts = self.running.entry(task_id.clone()).or_default();
         if attempts.contains_key(&key) {
@@ -145,6 +147,7 @@ impl DispatchScheduler {
             key: key.clone(),
             task_id: task_id.clone(),
             method_timeout_seconds,
+            scheduled_at,
             cancel,
         };
         let context = Arc::clone(&self.context);

@@ -9,9 +9,10 @@
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use bytes::Bytes;
-use dexzd_metrics::{ApiRequests, GrpcCode, RpcClass, classify_rpc};
+use dexzd_metrics::{ApiLatency, ApiRequests, GrpcCode, RpcClass, classify_rpc};
 use http_body::{Body as HttpBody, Frame, SizeHint};
 use tonic::body::Body;
 use tonic::codegen::{BoxFuture, Service, http};
@@ -21,12 +22,13 @@ use tower_layer::Layer;
 #[derive(Clone)]
 pub struct RequestMetricsLayer {
     requests: ApiRequests,
+    latency: ApiLatency,
 }
 
 impl RequestMetricsLayer {
     /// Creates a layer with one node's fixed counters.
-    pub fn new(requests: ApiRequests) -> Self {
-        Self { requests }
+    pub fn new(requests: ApiRequests, latency: ApiLatency) -> Self {
+        Self { requests, latency }
     }
 }
 
@@ -37,6 +39,7 @@ impl<S> Layer<S> for RequestMetricsLayer {
         RequestMetricsService {
             inner,
             requests: self.requests.clone(),
+            latency: self.latency.clone(),
         }
     }
 }
@@ -46,6 +49,7 @@ impl<S> Layer<S> for RequestMetricsLayer {
 pub struct RequestMetricsService<S> {
     inner: S,
     requests: ApiRequests,
+    latency: ApiLatency,
 }
 
 impl<S> Service<http::Request<Body>> for RequestMetricsService<S>
@@ -67,6 +71,8 @@ where
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
         let rpc_class = classify_rpc(request.uri().path());
         let requests = self.requests.clone();
+        let latency = self.latency.clone();
+        let started_at = Instant::now();
         let mut inner = self.inner.clone();
         Box::pin(async move {
             let response = inner.call(request).await?;
@@ -77,11 +83,14 @@ where
             let (parts, body) = response.into_parts();
             if body.is_end_stream() {
                 requests.record(rpc_class, initial_code);
+                latency.observe(rpc_class, started_at.elapsed().as_secs_f64());
                 return Ok(http::Response::from_parts(parts, body));
             }
             let body = Body::new(RequestMetricsBody {
                 inner: body,
                 completion: Some((requests, rpc_class)),
+                latency,
+                started_at,
                 code: initial_code,
             });
             Ok(http::Response::from_parts(parts, body))
@@ -102,6 +111,8 @@ fn status_code(headers: &http::HeaderMap) -> Option<GrpcCode> {
 struct RequestMetricsBody {
     inner: Body,
     completion: Option<(ApiRequests, RpcClass)>,
+    latency: ApiLatency,
+    started_at: Instant,
     code: GrpcCode,
 }
 
@@ -109,6 +120,8 @@ impl RequestMetricsBody {
     fn finish(&mut self) {
         if let Some((requests, rpc_class)) = self.completion.take() {
             requests.record(rpc_class, self.code);
+            self.latency
+                .observe(rpc_class, self.started_at.elapsed().as_secs_f64());
         }
     }
 }

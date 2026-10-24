@@ -22,23 +22,33 @@ macro_rules! label_value {
 mod api_requests;
 mod commit_latency;
 mod fixed_labels;
+mod histogram;
 mod object_requests;
 #[cfg(target_os = "linux")]
 mod process;
+mod semantic;
 mod timer_lag;
+mod worker_stream;
 
 use std::path::PathBuf;
 
-pub use api_requests::{ApiRequests, GrpcCode, RpcClass, classify_rpc};
+pub use api_requests::{ApiLatency, ApiRequests, GrpcCode, RpcClass, classify_rpc};
 pub use commit_latency::CommitLatency;
 pub use fixed_labels::{ObjectErrorCounters, OutcomeCounters, RoleGauges};
+pub use histogram::AtomicHistogram;
+use histogram::{FLOW_LATENCY_BOUNDS, SCHEDULE_LATENCY_BOUNDS};
 pub use object_requests::{ObjectKind, ObjectOperation, ObjectRequests, classify_object_kind};
 use prometheus_client::encoding::{EncodeLabelSet, text::encode};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::registry::Registry;
+pub use semantic::{
+    FlowCloseStatus, FlowCloses, StepAttemptFailures, StepDurability, StepFailureKind,
+    StepRetriesExhausted,
+};
 pub use timer_lag::TimerLag;
+pub use worker_stream::{WorkerStreamEvent, WorkerStreamEvents};
 
 /// The node's fixed set of metric handles.
 #[derive(Clone, Debug)]
@@ -53,6 +63,8 @@ pub struct NodeMetrics {
     pub lease_renewals: OutcomeCounters,
     /// Public gRPC request completions.
     pub api_requests: ApiRequests,
+    /// Completed unary gRPC request latency.
+    pub api_latency: ApiLatency,
     /// Durably committed batches.
     pub commit_batches: Counter,
     /// Durably committed commands.
@@ -85,6 +97,18 @@ pub struct NodeMetrics {
     pub matching_queued_tasks: Gauge,
     /// Open Worker poll streams.
     pub matching_worker_streams: Gauge,
+    /// Failed Step method attempts.
+    pub step_attempt_failures: StepAttemptFailures,
+    /// Step executions that exhausted their retries.
+    pub step_retries_exhausted: StepRetriesExhausted,
+    /// Closed Flow runs.
+    pub flow_closes: FlowCloses,
+    /// Run start to close latency.
+    pub flow_end_to_end_latency: AtomicHistogram<8>,
+    /// Committed Step task to Worker delivery latency.
+    pub step_schedule_to_start_latency: AtomicHistogram<7>,
+    /// Task deliveries and persistent Worker stream closes.
+    pub worker_stream_events: WorkerStreamEvents,
 }
 
 /// A lifecycle role for one node.
@@ -190,6 +214,11 @@ impl NodeMetrics {
             metrics.api_requests.clone(),
         );
         registry.register(
+            "dexzd_api_request_latency_seconds",
+            "Completed unary public API request latency.",
+            metrics.api_latency.clone(),
+        );
+        registry.register(
             "dexzd_commit_batches",
             "Durably committed batches.",
             metrics.commit_batches.clone(),
@@ -264,6 +293,36 @@ impl NodeMetrics {
             "Open Worker poll streams.",
             metrics.matching_worker_streams.clone(),
         );
+        registry.register(
+            "dexzd_step_attempt_failures",
+            "Failed Step method attempts.",
+            metrics.step_attempt_failures.clone(),
+        );
+        registry.register(
+            "dexzd_step_retries_exhausted",
+            "Step executions that exhausted their attempts.",
+            metrics.step_retries_exhausted.clone(),
+        );
+        registry.register(
+            "dexzd_flow_closes",
+            "Closed Flow runs.",
+            metrics.flow_closes.clone(),
+        );
+        registry.register(
+            "dexzd_flow_end_to_end_latency_seconds",
+            "Committed Flow run start to close latency.",
+            metrics.flow_end_to_end_latency.clone(),
+        );
+        registry.register(
+            "dexzd_step_schedule_to_start_latency_seconds",
+            "Committed Step task to Worker delivery latency.",
+            metrics.step_schedule_to_start_latency.clone(),
+        );
+        registry.register(
+            "dexzd_worker_stream_events",
+            "Delivered Worker tasks and closed Worker streams.",
+            metrics.worker_stream_events.clone(),
+        );
         registry.register_collector(Box::new(LocalStorageCollector {
             directory: local_store_directory,
             gauge: metrics.local_storage_bytes.clone(),
@@ -285,6 +344,7 @@ impl NodeMetrics {
             lease_epoch: Gauge::default(),
             lease_renewals: OutcomeCounters::default(),
             api_requests: ApiRequests::default(),
+            api_latency: ApiLatency::default(),
             commit_batches: Counter::default(),
             commit_records: Counter::default(),
             commit_bytes: Counter::default(),
@@ -301,6 +361,12 @@ impl NodeMetrics {
             timer_lag: TimerLag::new(partition_count),
             matching_queued_tasks: Gauge::default(),
             matching_worker_streams: Gauge::default(),
+            step_attempt_failures: StepAttemptFailures::default(),
+            step_retries_exhausted: StepRetriesExhausted::default(),
+            flow_closes: FlowCloses::default(),
+            flow_end_to_end_latency: AtomicHistogram::new(&FLOW_LATENCY_BOUNDS),
+            step_schedule_to_start_latency: AtomicHistogram::new(&SCHEDULE_LATENCY_BOUNDS),
+            worker_stream_events: WorkerStreamEvents::default(),
         }
     }
 

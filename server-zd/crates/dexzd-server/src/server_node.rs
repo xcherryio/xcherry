@@ -167,6 +167,7 @@ pub(crate) async fn start_server(
         listener,
         components.grpc_max_message_bytes,
         metrics.api_requests.clone(),
+        metrics.api_latency.clone(),
     )
     .await;
     let started = ServerNode::start(config, &components, metrics.clone(), cancellation).await;
@@ -219,6 +220,7 @@ impl GrpcServer {
         listener: TcpListener,
         max_message_bytes: usize,
         api_requests: dexzd_metrics::ApiRequests,
+        api_latency: dexzd_metrics::ApiLatency,
     ) -> Self {
         let (health, health_server) = HealthStatus::new().await;
         let flow_service_gate = StartupService::<FlowServiceServer<DexFlowService>>::new();
@@ -230,7 +232,7 @@ impl GrpcServer {
             tonic::transport::Server::builder()
                 .http2_keepalive_interval(Some(KEEPALIVE_INTERVAL))
                 .http2_keepalive_timeout(Some(KEEPALIVE_TIMEOUT))
-                .layer(RequestMetricsLayer::new(api_requests))
+                .layer(RequestMetricsLayer::new(api_requests, api_latency))
                 .layer(tower_layer::layer_fn(
                     client_deadline::client_deadline_layer,
                 ))

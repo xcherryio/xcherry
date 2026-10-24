@@ -33,18 +33,19 @@ use tokio_util::sync::CancellationToken;
 
 use crate::blocking_work::BlockingWorkFailure;
 use crate::effects::dispatch::MethodDispatchRequest;
+use crate::effects::dispatch::attempt_failure::AttemptFailure;
 use crate::effects::dispatch::worker_result::{
     MethodResult, WorkerResultCheck, check_worker_result,
 };
 use crate::effects::hard_delete_objects::{HardDeleteObjectOwner, HardDeleteUploads};
 use crate::effects::method_request::{
-    MethodAttemptKey, MethodAttemptState, MethodRequest, RequestValueHydration, RequestValueSlot,
+    MethodAttemptKey, MethodAttemptState, MethodRequest, RequestValueHydration,
     build_method_request, heartbeat_checkpoint_value, read_method_attempt_state,
     resolve_method_durability,
 };
 use crate::effects::state_reads::{RunLocation, decode_row};
 use crate::effects::{EffectContext, EffectError, EffectRuntimeError};
-use crate::runtime::{CommitUrgency, FlowAddress, grpc_code};
+use crate::runtime::{CommitUrgency, FlowAddress};
 
 const DEFAULT_METHOD_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -58,6 +59,7 @@ pub(crate) struct MethodAttempt {
     pub(crate) task_id: Vec<u8>,
     /// The method's configured timeout in seconds from the start effect; 0 means the default.
     pub(crate) method_timeout_seconds: i32,
+    pub(crate) scheduled_at: Option<std::time::Instant>,
     /// Canceled by `InvocationCanceled` or node shutdown.
     pub(crate) cancel: CancellationToken,
 }
@@ -80,35 +82,6 @@ enum BeforeDeadline<T> {
     Done(T),
     Canceled,
     TimedOut,
-}
-
-struct AttemptFailure {
-    kind: StepAttemptFailureKind,
-    worker_error: Option<WorkerErrorResponse>,
-    server_detail: String,
-    is_non_retryable: bool,
-    served_by_app_worker_id: String,
-    /// Slots of the values a Worker reported LoadBlobs omitted; `None` for other failures.
-    omitted_value_slots: Option<Vec<RequestValueSlot>>,
-}
-
-impl AttemptFailure {
-    fn server(kind: StepAttemptFailureKind, detail: impl Into<String>) -> Self {
-        Self {
-            kind,
-            worker_error: None,
-            server_detail: detail.into(),
-            is_non_retryable: false,
-            served_by_app_worker_id: String::new(),
-            omitted_value_slots: None,
-        }
-    }
-
-    /// Returns true for an error from the Step's code: SDKs report those with gRPC `UNKNOWN`.
-    fn is_step_error(&self) -> bool {
-        matches!(&self.worker_error, Some(error) if error.grpc_status == grpc_code::UNKNOWN)
-            && self.omitted_value_slots.is_none()
-    }
 }
 
 impl MethodAttempt {
@@ -447,7 +420,8 @@ impl MethodAttempt {
             request,
             deadline: wall_deadline,
         };
-        let mut session = match self.context.dispatcher.dispatch(dispatch_request) {
+        let dispatcher = &self.context.dispatcher;
+        let mut session = match dispatcher.dispatch_scheduled(dispatch_request, self.scheduled_at) {
             Ok(session) => session,
             Err(error) => {
                 return AttemptEnd::Failure(AttemptFailure::server(
