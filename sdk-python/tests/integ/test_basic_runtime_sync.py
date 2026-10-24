@@ -119,7 +119,6 @@ def test_model_input_workflow() -> None:
 
 
 def test_flow_config_override() -> None:
-    skip_if_server_zd("Continue-As-New")
     flow = BasicFlow()
     with DexDevTestEnvironment(flow) as environment:
         flow_id = unique_id("config-override")
@@ -166,6 +165,7 @@ def test_wait_for_step_completion() -> None:
 
 
 def test_proceed_on_wait_failure() -> None:
+    # C21: server-zd rejects Step failure policies.
     skip_if_server_zd("Step failure policies")
     flow = ProceedOnWaitFailureFlow()
     with DexDevTestEnvironment(flow) as environment:
@@ -189,6 +189,7 @@ def test_mixed_wait_styles() -> None:
 
 
 def test_movement_options_do_not_mutate_step_defaults() -> None:
+    # C21: server-zd rejects Step failure policies.
     skip_if_server_zd("Step failure policies")
     flow = ImmutableStepOptionsFlow()
     with DexDevTestEnvironment(flow) as environment:

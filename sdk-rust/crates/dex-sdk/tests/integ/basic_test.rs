@@ -185,9 +185,6 @@ fn test_model_input_workflow() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_workflow_config_override() {
-    if skip_if_server_zd("Continue-As-New") {
-        return;
-    }
     let environment = DexDevTestEnvironment::start(Registry::new().register(BasicWorkflow::new()));
     let workflow = BasicWorkflow::new();
     let flow_id = flow_id("config-override");
@@ -286,6 +283,7 @@ fn test_workflow_wait_for_step_completion() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_proceed_on_wait_failure_workflow() {
+    // C21: server-zd rejects Step failure policies.
     if skip_if_server_zd("Step failure policies") {
         return;
     }
@@ -333,6 +331,7 @@ fn test_mixed_wait_styles() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_movement_options_do_not_mutate_step_defaults() {
+    // C21: server-zd rejects Step failure policies.
     if skip_if_server_zd("Step failure policies") {
         return;
     }

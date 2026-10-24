@@ -35,7 +35,7 @@ import {
   type StepDecision,
 } from "../../src/index.js";
 import { WorkerPortReservation } from "../worker-port-reservation.js";
-import { flowId, skipIfServerZD } from "./environment.js";
+import { flowId, isServerZD } from "./environment.js";
 
 interface Observation {
   readonly workerID: string;
@@ -184,7 +184,8 @@ class PullOverrideParentFlow implements Flow<string> {
 }
 
 test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and coexists with push", async (context) => {
-  if (await skipIfServerZD(context, "push Workers")) return;
+  // C18: server-zd rejects push Worker targets, so push sections need the Go Server.
+  const serverSupportsPushWorkers = !await isServerZD();
   const serverAddress = process.env.DEX_SERVER_ADDRESS ?? "127.0.0.1:8801";
   const cacheDirectory = mkdtempSync(join(tmpdir(), "dex-typescript-pull-cache-"));
   const cache: BlobCache = openBlobCache({ directory: cacheDirectory, maxBytes: 64 * 1_024 * 1_024 });
@@ -215,7 +216,9 @@ test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and c
   });
   try {
     await reservation.release();
-    await pushWorker.start();
+    if (serverSupportsPushWorkers) {
+      await pushWorker.start();
+    }
     await workerA.start();
     const id = flowId("pull-typescript");
     await client.startFlow(flowA, id, "completed");
@@ -227,14 +230,16 @@ test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and c
 
     await workerB.start();
     assert.equal(await runProbe(client, probe), "pull-b");
-    const subFlowId = flowId("pull-subflow-override");
-    await client.startFlow(parentFlow, subFlowId, "child", {
-      configOverride: { workerTarget: pushWorker.workerTarget },
-    });
-    assert.equal(
-      await client.waitForFlow(subFlowId, 30_000).then((result) => result.singleOutput(stringCodec)),
-      "pull-b",
-    );
+    if (serverSupportsPushWorkers) {
+      const subFlowId = flowId("pull-subflow-override");
+      await client.startFlow(parentFlow, subFlowId, "child", {
+        configOverride: { workerTarget: pushWorker.workerTarget },
+      });
+      assert.equal(
+        await client.waitForFlow(subFlowId, 30_000).then((result) => result.singleOutput(stringCodec)),
+        "pull-b",
+      );
+    }
     releaseFirst();
     await until(() => observations.some((entry) => entry.method === "SecondExecute"));
     assert.deepEqual(observations.slice(2, 4), [
@@ -257,14 +262,16 @@ test("pull Worker executes Steps and RPC with sticky routing, drains Stop, and c
       { workerID: "pull-a", method: "SecondExecute" },
     ]);
 
-    const pushId = flowId("push-alongside-pull");
-    await client.startFlow(pushFlow, pushId, "push", {
-      configOverride: { workerTarget: pushWorker.workerTarget },
-    });
-    assert.equal(
-      await client.waitForFlow(pushId, 30_000).then((result) => result.singleOutput(stringCodec)),
-      "push",
-    );
+    if (serverSupportsPushWorkers) {
+      const pushId = flowId("push-alongside-pull");
+      await client.startFlow(pushFlow, pushId, "push", {
+        configOverride: { workerTarget: pushWorker.workerTarget },
+      });
+      assert.equal(
+        await client.waitForFlow(pushId, 30_000).then((result) => result.singleOutput(stringCodec)),
+        "push",
+      );
+    }
   } finally {
     releaseFirst();
     releaseSecond();

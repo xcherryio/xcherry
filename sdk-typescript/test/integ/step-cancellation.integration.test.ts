@@ -21,6 +21,7 @@ import {
 for (const scenario of cancellationScenarios) {
   test(`Step cancellation ${scenario}`, async (context) => {
     if (scenario !== "global-selector" && scenario !== "sibling-selector") {
+      // C21: server-zd rejects Step failure policies.
       if (await skipIfServerZD(context, "Step failure policies")) return;
     }
     const flow = new StepCancellationFlow(scenario);

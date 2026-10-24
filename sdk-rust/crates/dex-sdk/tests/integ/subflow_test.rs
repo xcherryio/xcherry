@@ -124,6 +124,7 @@ fn test_subflow_default_reuse_restarts_failed_execution_across_parent_reset() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_subflow_partial_results_survive_continue_as_new_without_restart() {
+    // C3: server-zd never continues a run as new.
     if skip_if_server_zd("Continue-As-New") {
         return;
     }
