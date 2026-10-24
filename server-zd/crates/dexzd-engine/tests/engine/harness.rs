@@ -16,9 +16,9 @@ use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, NodeConfig};
 use dexzd_engine::{
     CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency, CommittedCommandSink,
-    CommittedFlowCommand, EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks,
-    EngineServices, EngineStartError, LocalStoreConfig, PartitionRuntimeRebuilder,
-    RuntimeRebuildError, SnapshotConfig,
+    CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig, EngineNodeDependencies,
+    EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
+    PartitionRuntimeRebuilder, RuntimeRebuildError, SnapshotConfig,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
@@ -395,7 +395,16 @@ impl TestNode {
 
     /// Returns the committed counter of `flow_id`.
     pub(crate) async fn committed_count(&self, flow_id: &str) -> u64 {
-        let view = self.node.committer().committed_view();
+        let view = self
+            .node
+            .committer()
+            .committed_view()
+            .expect("committed view opens");
+        self.count_in_view(view, flow_id).await
+    }
+
+    /// Returns the counter of `flow_id` as `view` sees it.
+    pub(crate) async fn count_in_view(&self, view: CommittedStateView, flow_id: &str) -> u64 {
         let key = counter_key(&self.context(flow_id), flow_id);
         tokio::task::spawn_blocking(move || {
             view.get(ColumnFamily::Flow, &key)

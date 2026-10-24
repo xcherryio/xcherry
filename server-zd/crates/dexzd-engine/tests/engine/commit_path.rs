@@ -290,6 +290,39 @@ async fn a_frame_still_applying_when_the_node_stops_is_not_written() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_committed_view_keeps_the_state_it_was_opened_with() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let local_stores = [
+        LocalStoreConfig::InMemory,
+        LocalStoreConfig::RocksDb {
+            directory: directory.path().join("store"),
+            options: RocksDbStoreOptions::default(),
+        },
+    ];
+    for local_store in local_stores {
+        let mut cluster = TestCluster::new();
+        let test = cluster
+            .start(
+                &cluster.config(local_store),
+                Arc::new(CountingApplier::default()),
+                Arc::new(RecordingRuntime::default()),
+            )
+            .await
+            .expect("node starts");
+        test.commit_prompt("view-flow", 1).await;
+        let earlier_view = test
+            .node
+            .committer()
+            .committed_view()
+            .expect("committed view opens");
+        test.commit_prompt("view-flow", 1).await;
+        assert_eq!(test.count_in_view(earlier_view, "view-flow").await, 1);
+        assert_eq!(test.committed_count("view-flow").await, 2);
+        test.node.shutdown().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn object_storage_outage_stops_the_node() {
     let mut cluster = TestCluster::new();
     let test = cluster.start_in_memory().await;

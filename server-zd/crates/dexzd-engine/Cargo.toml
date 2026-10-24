@@ -23,6 +23,7 @@ dexzd-worker-dispatch.workspace = true
 futures.workspace = true
 prost.workspace = true
 prost-types.workspace = true
+self_cell.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

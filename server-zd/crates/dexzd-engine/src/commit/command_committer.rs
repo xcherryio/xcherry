@@ -174,9 +174,16 @@ impl CommandCommitter {
         Ok((command, ticket))
     }
 
-    /// Returns a view of committed state. Reads block, so use it on a blocking-pool thread.
-    pub fn committed_view(&self) -> CommittedStateView {
-        CommittedStateView::new(self.inner.store.clone())
+    /// Returns a consistent view of committed state. Reads block, so use it on a
+    /// blocking-pool thread.
+    ///
+    /// Fails with [`CommitError::Unavailable`] when the local store cannot open a view.
+    pub fn committed_view(&self) -> Result<CommittedStateView, CommitError> {
+        CommittedStateView::open(self.inner.store.clone()).map_err(|error| {
+            CommitError::Unavailable {
+                detail: format!("local store cannot open a consistent view: {error}"),
+            }
+        })
     }
 
     /// Compares speculative and committed outcomes when debug replay checks are on.
@@ -221,7 +228,7 @@ impl FlowCommandCommitter for CommandCommitter {
     }
 
     fn committed_view(&self) -> Result<Box<dyn FlowStateReader + Send>, CommitError> {
-        Ok(Box::new(CommandCommitter::committed_view(self)))
+        Ok(Box::new(CommandCommitter::committed_view(self)?))
     }
 
     fn check_speculative_outcome(
