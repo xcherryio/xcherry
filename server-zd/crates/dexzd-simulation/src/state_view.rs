@@ -271,6 +271,7 @@ impl FlowView {
             | RunTable::PermissionSet
             | RunTable::Value
             | RunTable::HistoryRecord
+            | RunTable::HistoryRowMetadata
             | RunTable::Checkpoint
             | RunTable::SearchDocument
             | RunTable::RequestDedupOrder
