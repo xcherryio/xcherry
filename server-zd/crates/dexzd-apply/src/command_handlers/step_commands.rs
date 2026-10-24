@@ -235,7 +235,7 @@ pub(crate) fn apply_flow_timeout(
                 step_type: crate::steps::TIMEOUT_HANDLER_STEP_TYPE,
                 input: None,
                 options: Some(&options),
-                from_step_execution_id: "",
+                from_step_execution_id: crate::steps::STARTING_STEP_FROM_STEP_EXECUTION_ID,
                 is_timeout_handler: true,
             };
             if create_step_execution(transaction, cursor, scope.now_micros, &new_step)?.is_ok()

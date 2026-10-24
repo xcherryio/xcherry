@@ -31,7 +31,9 @@ use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
 use crate::command_handlers::{CommandScope, HandlerResult};
 use crate::projections::history_events;
 use crate::state_access::{FlowTransaction, RunRows, read_flow_directory, write_flow_directory};
-use crate::steps::{NewStepExecution, arm_timer, create_step_execution};
+use crate::steps::{
+    NewStepExecution, STARTING_STEP_FROM_STEP_EXECUTION_ID, arm_timer, create_step_execution,
+};
 use crate::values::{ValueHolder, ValueRejection, hold_stored_value};
 
 /// Everything needed to start a run, from a client StartFlow or a child Flow start.
@@ -209,7 +211,7 @@ pub(crate) fn start_run(
             step_type: &request.start_step_type,
             input: request.step_input.as_ref(),
             options: request.step_options.as_ref(),
-            from_step_execution_id: "",
+            from_step_execution_id: STARTING_STEP_FROM_STEP_EXECUTION_ID,
             is_timeout_handler: false,
         };
         let start_step_id =

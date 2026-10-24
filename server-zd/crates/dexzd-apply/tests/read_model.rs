@@ -2191,6 +2191,7 @@ fn history_pages_a_full_flow_and_allocates_pending_ids_at_close() {
             method.context,
             Some(StepMethodEventContext {
                 step_execution_id: "ChargeStep-1".to_owned(),
+                from_step_execution_id: "__start__".to_owned(),
                 step_type: "ChargeStep".to_owned(),
                 durability: StepDurability::Sync as i32,
                 final_attempt: 1,
@@ -2305,6 +2306,7 @@ fn completed_method_contexts_include_effective_options_and_timing() {
         wait_for.context,
         Some(StepMethodEventContext {
             step_execution_id: "ChargeStep-1".to_owned(),
+            from_step_execution_id: "__start__".to_owned(),
             step_type: "ChargeStep".to_owned(),
             durability: StepDurability::Sync as i32,
             final_attempt: 1,
@@ -2336,6 +2338,7 @@ fn completed_method_contexts_include_effective_options_and_timing() {
         execute.context,
         Some(StepMethodEventContext {
             step_execution_id: "ChargeStep-1".to_owned(),
+            from_step_execution_id: "__start__".to_owned(),
             step_type: "ChargeStep".to_owned(),
             durability: StepDurability::Async as i32,
             final_attempt: 1,
@@ -2521,7 +2524,7 @@ fn retried_method_contexts_keep_the_previous_failure_and_final_start() {
     };
     let wait_for_context = wait_for.context.as_ref().unwrap();
     assert_eq!(wait_for_context.step_execution_id, "ChargeStep-1");
-    assert_eq!(wait_for_context.from_step_execution_id, "");
+    assert_eq!(wait_for_context.from_step_execution_id, "__start__");
     assert_eq!(wait_for_context.step_type, "ChargeStep");
     assert_eq!(wait_for_context.durability, StepDurability::Sync as i32);
     assert_eq!(wait_for_context.final_attempt, 2);
@@ -2562,7 +2565,7 @@ fn retried_method_contexts_keep_the_previous_failure_and_final_start() {
     };
     let execute_context = execute.context.as_ref().unwrap();
     assert_eq!(execute_context.step_execution_id, "ChargeStep-1");
-    assert_eq!(execute_context.from_step_execution_id, "");
+    assert_eq!(execute_context.from_step_execution_id, "__start__");
     assert_eq!(execute_context.step_type, "ChargeStep");
     assert_eq!(execute_context.durability, StepDurability::Sync as i32);
     assert_eq!(execute_context.final_attempt, 2);
@@ -2741,7 +2744,7 @@ fn pending_retry_context_reports_the_last_started_attempt() {
         );
         let context = pending.context.as_ref().unwrap();
         assert_eq!(context.step_execution_id, "ChargeStep-1");
-        assert_eq!(context.from_step_execution_id, "");
+        assert_eq!(context.from_step_execution_id, "__start__");
         assert_eq!(context.step_type, "ChargeStep");
         assert_eq!(context.durability, StepDurability::Sync as i32);
         assert_eq!(context.final_attempt, if is_retry_running { 2 } else { 1 });
@@ -2920,7 +2923,7 @@ fn pending_execute_includes_condition_results_and_state_only_lists_completed_con
     };
     let context = method.context.as_ref().unwrap();
     assert_eq!(context.step_execution_id, "ChargeStep-1");
-    assert_eq!(context.from_step_execution_id, "");
+    assert_eq!(context.from_step_execution_id, "__start__");
     assert_eq!(context.step_type, "ChargeStep");
     assert_eq!(context.durability, StepDurability::Sync as i32);
     assert_eq!(context.final_attempt, 1);

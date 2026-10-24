@@ -37,3 +37,4 @@ pub(crate) use step_results::{
 pub(crate) const TIMEOUT_HANDLER_STEP_EXECUTION_ID: &str = "sys:timeout_handler-1";
 /// Step type of the Flow timeout handler.
 pub(crate) const TIMEOUT_HANDLER_STEP_TYPE: &str = "sys:timeout_handler";
+pub(crate) const STARTING_STEP_FROM_STEP_EXECUTION_ID: &str = "__start__";
