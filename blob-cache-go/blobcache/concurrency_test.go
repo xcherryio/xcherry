@@ -86,6 +86,39 @@ func TestConcurrentDifferentIDPutsCommitFiles(t *testing.T) {
 	require.Len(t, regularFiles(t, filepath.Join(rootDir, "blobs")), workerCount)
 }
 
+func TestDistinctPutProgressesDuringBlockedWrite(t *testing.T) {
+	rootDir := t.TempDir()
+	baseStore, err := newLocalFileStore(rootDir)
+	require.NoError(t, err)
+	blockingStore := &blockingStageStore{
+		fileStore: baseStore,
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	cache, err := newCache(&Config{Dir: rootDir, MaxBytes: 1 << 20, FrequencyCounters: 10_000}, blockingStore)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cache.Close()) })
+	defer blockingStore.releaseOnce.Do(func() { close(blockingStore.release) })
+
+	firstDone := make(chan error, 1)
+	go runCachePut(cache, "first", firstDone)
+	select {
+	case <-blockingStore.started:
+	case <-time.After(testEventuallyTimeout):
+		t.Fatal("first write did not reach the blocked stage")
+	}
+	secondDone := make(chan error, 1)
+	go runCachePut(cache, "second", secondDone)
+	select {
+	case putErr := <-secondDone:
+		require.NoError(t, putErr)
+	case <-time.After(testEventuallyTimeout):
+		t.Fatal("distinct Put waited for the blocked write")
+	}
+	blockingStore.releaseOnce.Do(func() { close(blockingStore.release) })
+	require.NoError(t, <-firstDone)
+}
+
 func BenchmarkCachePut4KiB(b *testing.B) {
 	benchmarkCachePut4KiB(b, false)
 }
@@ -309,6 +342,14 @@ func runCacheDelete(cache *Cache, blobID string, done chan<- error) {
 	done <- cache.Delete(blobID)
 }
 
+func runCachePut(cache *Cache, blobID string, done chan<- error) {
+	cached, err := cache.Put(blobID, []byte("payload"))
+	if err == nil && !cached {
+		err = fmt.Errorf("blob %q was not admitted", blobID)
+	}
+	done <- err
+}
+
 type evictionProbe struct {
 	cache  *Cache
 	blobID string
@@ -335,6 +376,21 @@ type blockingReadStore struct {
 	releaseRead  chan struct{}
 	removeCalled chan struct{}
 	startOnce    sync.Once
+}
+
+type blockingStageStore struct {
+	fileStore
+	started     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func (store *blockingStageStore) stage(metadata fileMetadata, payload []byte) (string, commitResult, error) {
+	if metadata.blobID == "first" {
+		close(store.started)
+		<-store.release
+	}
+	return store.fileStore.stage(metadata, payload)
 }
 
 func (store *blockingReadStore) read(entry *diskEntry) ([]byte, error) {

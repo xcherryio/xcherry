@@ -9,6 +9,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
@@ -21,11 +23,16 @@ use super::format::{FIXED_HEADER_SIZE, FileHeader, FileMetadata, decode_header, 
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Debug)]
+#[cfg(test)]
+type WriteHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+#[derive(Clone)]
 pub(crate) struct LocalFileStore {
     root: PathBuf,
     temp: PathBuf,
     blobs: PathBuf,
+    #[cfg(test)]
+    pub(crate) write_hook: Option<WriteHook>,
 }
 
 #[derive(Debug)]
@@ -55,6 +62,8 @@ impl LocalFileStore {
             temp: root.join("tmp"),
             blobs: root.join("blobs"),
             root,
+            #[cfg(test)]
+            write_hook: None,
         })
     }
 
@@ -94,45 +103,59 @@ impl LocalFileStore {
             .join(format!("{encoded}.blob"))
     }
 
-    pub(crate) fn commit(
+    pub(crate) fn stage(
         &self,
         metadata: &FileMetadata,
         payload: &[u8],
+    ) -> Result<PathBuf, CommitFailure> {
+        let (mut temp_file, temp_path) = self.create_temp_file()?;
+        #[cfg(test)]
+        if let Some(hook) = &self.write_hook {
+            hook(&metadata.blob_id);
+        }
+        let write_result = self.write_temp(&mut temp_file, metadata, payload);
+        drop(temp_file);
+        if let Err(error) = write_result {
+            return Err(self.failed_commit(&temp_path, error));
+        }
+        Ok(temp_path)
+    }
+
+    pub(crate) fn publish(
+        &self,
+        metadata: &FileMetadata,
+        temp_path: &Path,
     ) -> Result<(), CommitFailure> {
         let parent = metadata
             .path
             .parent()
             .ok_or_else(|| BlobCacheError::InvalidBlob("cache path has no parent".to_owned()))?;
-        create_private_directory(parent, "create blob cache shard")?;
-        match fs::symlink_metadata(&metadata.path) {
-            Ok(_) => {
-                return Err(BlobCacheError::ContentMismatch(metadata.blob_id.clone()).into());
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(BlobCacheError::io("inspect final cache path", error).into());
-            }
-        }
-
-        let (mut temp_file, temp_path) = self.create_temp_file()?;
-        let write_result = self.write_temp(&mut temp_file, metadata, payload);
-        drop(temp_file);
-        let result = write_result.and_then(|()| {
-            fs::rename(&temp_path, &metadata.path)
-                .map_err(|error| BlobCacheError::io("commit blob cache file", error))
-        });
+        let result = create_private_directory(parent, "create blob cache shard")
+            .and_then(|()| match fs::symlink_metadata(&metadata.path) {
+                Ok(_) => Err(BlobCacheError::ContentMismatch(metadata.blob_id.clone())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(BlobCacheError::io("inspect final cache path", error)),
+            })
+            .and_then(|()| {
+                fs::rename(temp_path, &metadata.path)
+                    .map_err(|error| BlobCacheError::io("commit blob cache file", error))
+            });
         if let Err(error) = result {
-            if let Err(cleanup_error) = remove_file_if_present(&temp_path) {
-                return Err(CommitFailure {
-                    error: BlobCacheError::Reconciliation(format!(
-                        "{error}; remove temporary file: {cleanup_error}"
-                    )),
-                    orphan_path: Some(temp_path),
-                });
-            }
-            return Err(error.into());
+            return Err(self.failed_commit(temp_path, error));
         }
         Ok(())
+    }
+
+    fn failed_commit(&self, temp_path: &Path, error: BlobCacheError) -> CommitFailure {
+        if let Err(cleanup_error) = remove_file_if_present(temp_path) {
+            return CommitFailure {
+                error: BlobCacheError::Reconciliation(format!(
+                    "{error}; remove temporary file: {cleanup_error}"
+                )),
+                orphan_path: Some(temp_path.to_path_buf()),
+            };
+        }
+        error.into()
     }
 
     pub(crate) fn read(&self, entry: &DiskEntry) -> Result<Vec<u8>, BlobCacheError> {

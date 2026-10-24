@@ -37,6 +37,9 @@ type Cache struct {
 	lifecycleMu sync.RWMutex
 	commitMu    sync.Mutex
 	callbackMu  sync.Mutex
+	pendingMu   sync.Mutex
+	pendingCond *sync.Cond
+	pendingKeys map[string]struct{}
 
 	callbackErr    error
 	cleanupBacklog map[string]struct{}
@@ -70,7 +73,9 @@ func newCache(cfg *Config, store fileStore) (*Cache, error) {
 		store:          store,
 		logger:         defaultLogger(cfg.Logger),
 		cleanupBacklog: make(map[string]struct{}),
+		pendingKeys:    make(map[string]struct{}),
 	}
+	cache.pendingCond = sync.NewCond(&cache.pendingMu)
 	if err := cache.initializePolicy(); err != nil {
 		return nil, err
 	}
@@ -172,12 +177,6 @@ func (cache *Cache) Put(blobID string, payload []byte) (bool, error) {
 		return false, ErrClosed
 	}
 
-	cache.commitMu.Lock()
-	defer cache.commitMu.Unlock()
-	if err := cache.retryCleanup(); err != nil {
-		return false, err
-	}
-
 	metadata, err := calculateMetadata(blobID, payload, cache.store.pathFor(blobID))
 	if err != nil {
 		return false, err
@@ -185,35 +184,34 @@ func (cache *Cache) Put(blobID string, payload []byte) (bool, error) {
 	if metadata.size > cache.cfg.MaxBytes {
 		return false, nil
 	}
+	cache.reservePut(blobID)
+	defer cache.releasePut(blobID)
 
-	reused, found, err := cache.reuseExisting(metadata, payload)
-	if err != nil {
-		return false, err
-	}
-	if found {
-		return reused, nil
+	entry, completed, accepted, err := cache.admitPut(metadata, payload)
+	if completed {
+		return accepted, err
 	}
 
-	entry := newPendingEntry(metadata)
-	cache.resetCallbackError()
-	if !cache.policy.Set(blobID, entry, metadata.size) {
-		entry.beginEviction()
-		return false, nil
-	}
-	cache.policy.Wait()
-
-	callbackErr := cache.takeCallbackError()
-	if callbackErr != nil {
+	tempPath, stageResult, stageErr := cache.store.stage(metadata, payload)
+	cache.commitMu.Lock()
+	defer cache.commitMu.Unlock()
+	if stageErr != nil {
+		if stageResult.orphanPath != "" {
+			cache.addCleanupPath(stageResult.orphanPath)
+		}
 		cache.removeCandidate(entry)
-		return false, fmt.Errorf("%w: %v", ErrReconciliation, callbackErr)
+		return false, stageErr
 	}
 	admitted, found := cache.policy.Get(blobID)
 	if !found || admitted != entry {
 		entry.beginEviction()
+		if err := cache.store.remove(tempPath); err != nil {
+			cache.addCleanupPath(tempPath)
+			return false, err
+		}
 		return false, nil
 	}
-
-	commitResult, err := cache.store.commit(metadata, payload)
+	commitResult, err := cache.store.publish(metadata, tempPath)
 	if err != nil {
 		if commitResult.orphanPath != "" {
 			cache.addCleanupPath(commitResult.orphanPath)
@@ -225,6 +223,61 @@ func (cache *Cache) Put(blobID string, payload []byte) (bool, error) {
 		panic("admitted blob cache entry left pending state")
 	}
 	return true, nil
+}
+
+func (cache *Cache) admitPut(metadata fileMetadata, payload []byte) (*diskEntry, bool, bool, error) {
+	cache.commitMu.Lock()
+	defer cache.commitMu.Unlock()
+	if err := cache.retryCleanup(); err != nil {
+		return nil, true, false, err
+	}
+
+	reused, found, err := cache.reuseExisting(metadata, payload)
+	if err != nil {
+		return nil, true, false, err
+	}
+	if found {
+		return nil, true, reused, nil
+	}
+
+	entry := newPendingEntry(metadata)
+	cache.resetCallbackError()
+	if !cache.policy.Set(metadata.blobID, entry, metadata.size) {
+		entry.beginEviction()
+		return nil, true, false, nil
+	}
+	cache.policy.Wait()
+
+	callbackErr := cache.takeCallbackError()
+	if callbackErr != nil {
+		cache.removeCandidate(entry)
+		return nil, true, false, fmt.Errorf("%w: %v", ErrReconciliation, callbackErr)
+	}
+	admitted, found := cache.policy.Get(metadata.blobID)
+	if !found || admitted != entry {
+		entry.beginEviction()
+		return nil, true, false, nil
+	}
+	return entry, false, false, nil
+}
+
+func (cache *Cache) reservePut(blobID string) {
+	cache.pendingMu.Lock()
+	defer cache.pendingMu.Unlock()
+	for {
+		if _, found := cache.pendingKeys[blobID]; !found {
+			cache.pendingKeys[blobID] = struct{}{}
+			return
+		}
+		cache.pendingCond.Wait()
+	}
+}
+
+func (cache *Cache) releasePut(blobID string) {
+	cache.pendingMu.Lock()
+	delete(cache.pendingKeys, blobID)
+	cache.pendingCond.Broadcast()
+	cache.pendingMu.Unlock()
 }
 
 // Delete removes one cached blob without deleting source data.

@@ -42,8 +42,10 @@ type fileStore interface {
 	scan() (scanResult, error)
 	// pathFor maps a blob ID to its deterministic sharded path.
 	pathFor(blobID string) string
-	// commit atomically publishes a complete entry and reports failed cleanup.
-	commit(metadata fileMetadata, payload []byte) (commitResult, error)
+	// stage writes a complete temporary entry without publishing it.
+	stage(metadata fileMetadata, payload []byte) (string, commitResult, error)
+	// publish atomically places a staged entry at its final path.
+	publish(metadata fileMetadata, tempPath string) (commitResult, error)
 	// read validates the stored entry before returning its payload.
 	read(entry *diskEntry) ([]byte, error)
 	// remove deletes one entry while treating an absent file as removed.
@@ -182,19 +184,10 @@ func (store *localFileStoreImpl) pathFor(blobID string) string {
 	return filepath.Join(store.blobsDir, encoded[0:2], encoded[2:4], encoded+".blob")
 }
 
-func (store *localFileStoreImpl) commit(metadata fileMetadata, payload []byte) (commitResult, error) {
-	if err := os.MkdirAll(filepath.Dir(metadata.path), 0o700); err != nil {
-		return commitResult{}, fmt.Errorf("create blob cache shard: %w", err)
-	}
-	if _, err := os.Lstat(metadata.path); err == nil {
-		return commitResult{}, fmt.Errorf("%w: final path already exists", ErrContentMismatch)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return commitResult{}, fmt.Errorf("inspect final cache path: %w", err)
-	}
-
+func (store *localFileStoreImpl) stage(metadata fileMetadata, payload []byte) (string, commitResult, error) {
 	tempFile, err := os.CreateTemp(store.tempDir, "blob-*.tmp")
 	if err != nil {
-		return commitResult{}, fmt.Errorf("create blob cache temp file: %w", err)
+		return "", commitResult{}, fmt.Errorf("create blob cache temp file: %w", err)
 	}
 	tempPath := tempFile.Name()
 
@@ -204,16 +197,32 @@ func (store *localFileStoreImpl) commit(metadata fileMetadata, payload []byte) (
 		checksum:      metadata.checksum,
 	})
 	if err := writeAll(tempFile, header); err != nil {
-		return store.failCommit(tempFile, tempPath, fmt.Errorf("write blob cache header: %w", err))
+		result, failure := store.failCommit(tempFile, tempPath, fmt.Errorf("write blob cache header: %w", err))
+		return "", result, failure
 	}
 	if err := writeAll(tempFile, []byte(metadata.blobID)); err != nil {
-		return store.failCommit(tempFile, tempPath, fmt.Errorf("write blob cache ID: %w", err))
+		result, failure := store.failCommit(tempFile, tempPath, fmt.Errorf("write blob cache ID: %w", err))
+		return "", result, failure
 	}
 	if err := writeAll(tempFile, payload); err != nil {
-		return store.failCommit(tempFile, tempPath, fmt.Errorf("write blob cache payload: %w", err))
+		result, failure := store.failCommit(tempFile, tempPath, fmt.Errorf("write blob cache payload: %w", err))
+		return "", result, failure
 	}
 	if err := tempFile.Close(); err != nil {
-		return store.failCommit(nil, tempPath, fmt.Errorf("close blob cache temp file: %w", err))
+		result, failure := store.failCommit(nil, tempPath, fmt.Errorf("close blob cache temp file: %w", err))
+		return "", result, failure
+	}
+	return tempPath, commitResult{}, nil
+}
+
+func (store *localFileStoreImpl) publish(metadata fileMetadata, tempPath string) (commitResult, error) {
+	if err := os.MkdirAll(filepath.Dir(metadata.path), 0o700); err != nil {
+		return store.failCommit(nil, tempPath, fmt.Errorf("create blob cache shard: %w", err))
+	}
+	if _, err := os.Lstat(metadata.path); err == nil {
+		return store.failCommit(nil, tempPath, fmt.Errorf("%w: final path already exists", ErrContentMismatch))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return store.failCommit(nil, tempPath, fmt.Errorf("inspect final cache path: %w", err))
 	}
 	if err := os.Rename(tempPath, metadata.path); err != nil {
 		return store.failCommit(nil, tempPath, fmt.Errorf("commit blob cache file: %w", err))
