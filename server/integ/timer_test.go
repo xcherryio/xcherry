@@ -112,6 +112,7 @@ func doTestTimerFlow(
 	backendType service.BackendType,
 	flowConfig *dexpb.FlowConfig,
 ) {
+	requireTemporalOnly(t)
 	workerHandler := timer.NewHandler()
 	workerTarget := startWorker(t, workerHandler)
 	runtime := startDexService(t, DexServiceTestConfig{BackendType: backendType})

@@ -92,7 +92,7 @@ impl LogCleanup {
             self.object_store.as_ref(),
             self.clock.as_ref(),
             |manifest| {
-                let mut change = dexzd_cluster_metadata::Change::Unchanged;
+                let mut change = dexzd_cluster_metadata::ManifestChange::Unchanged;
                 for segment in manifest
                     .partitions
                     .iter_mut()
@@ -104,7 +104,7 @@ impl LogCleanup {
                         && segment.start_seq < first_retained_seq
                     {
                         segment.start_seq = first_retained_seq;
-                        change = dexzd_cluster_metadata::Change::Changed;
+                        change = dexzd_cluster_metadata::ManifestChange::Changed;
                     }
                 }
                 Ok(change)

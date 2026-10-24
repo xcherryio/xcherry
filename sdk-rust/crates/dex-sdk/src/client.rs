@@ -612,14 +612,10 @@ impl Client {
     pub fn time_travel(&self, flow_id: &str, options: TimeTravelOptions) -> SdkResult<String> {
         let mut request = ResetFlowRequest {
             flow_id: flow_id.to_string(),
-            run_id: String::new(),
             reset_type: FlowResetType::Unspecified as i32,
             reason: options.reason.unwrap_or_default(),
-            history_event_time: String::new(),
-            step_type: String::new(),
-            step_execution_id: String::new(),
             skip_writes_reapply: options.skip_writes_reapply,
-            step_method: FlowResetStepMethod::Unspecified as i32,
+            ..Default::default()
         };
         match options.point {
             TimeTravelPoint::Beginning => request.reset_type = FlowResetType::Beginning as i32,
@@ -1639,6 +1635,7 @@ mod tests {
                         server_version: "fake".to_string(),
                         minimum_supported_protocol_version: 1,
                         current_protocol_version,
+                        server_engine: 0,
                     }))
                 })
             }

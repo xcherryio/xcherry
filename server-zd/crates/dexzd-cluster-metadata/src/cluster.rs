@@ -62,20 +62,28 @@ pub async fn bootstrap_or_validate(
                 key_layout_version: KEY_LAYOUT_VERSION,
                 created_at_unix_micros: clock.now_unix_micros(),
             };
-            let result = store
-                .put(
-                    CLUSTER_KEY,
-                    Bytes::from(proposed.encode_to_vec()),
-                    WriteCondition::CreateOnly,
-                )
-                .await;
-            match result {
-                Ok(WriteOutcome::Written { .. }) => proposed,
-                Ok(WriteOutcome::PreconditionFailed) => read_cluster(store).await?,
-                Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {
-                    read_cluster(store).await?
+            loop {
+                let write_result = store
+                    .put(
+                        CLUSTER_KEY,
+                        Bytes::from(proposed.encode_to_vec()),
+                        WriteCondition::CreateOnly,
+                    )
+                    .await;
+                match write_result {
+                    Ok(WriteOutcome::Written { .. }) => break proposed,
+                    Ok(WriteOutcome::PreconditionFailed) => {
+                        if let Some(existing) = store.get(CLUSTER_KEY).await? {
+                            break decode_cluster(existing.bytes)?;
+                        }
+                    }
+                    Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {
+                        if let Some(existing) = store.get(CLUSTER_KEY).await? {
+                            break decode_cluster(existing.bytes)?;
+                        }
+                    }
+                    Err(error) => return Err(error.into()),
                 }
-                Err(error) => return Err(error.into()),
             }
         }
     };
@@ -118,14 +126,6 @@ pub async fn bootstrap_or_validate(
     })
 }
 
-async fn read_cluster(store: &dyn ObjectStore) -> Result<ClusterObject, MetadataError> {
-    let content = store
-        .get(CLUSTER_KEY)
-        .await?
-        .ok_or(MetadataError::Missing { key: CLUSTER_KEY })?;
-    decode_cluster(content.bytes)
-}
-
 fn decode_cluster(bytes: Bytes) -> Result<ClusterObject, MetadataError> {
     ClusterObject::decode(bytes).map_err(|source| MetadataError::Decode {
         key: CLUSTER_KEY,
@@ -152,9 +152,8 @@ fn random_hash_key() -> Result<[u8; 16], MetadataError> {
     let mut key = [0; 16];
     SysRng
         .try_fill_bytes(&mut key)
-        .map_err(|error| MetadataError::InvalidMetadata {
-            key: CLUSTER_KEY,
-            detail: format!("OS random generator failed: {error}"),
+        .map_err(|error| MetadataError::RandomSource {
+            detail: error.to_string(),
         })?;
     Ok(key)
 }

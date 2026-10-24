@@ -26,10 +26,20 @@ pub(crate) fn required<'a>(
     })
 }
 
-pub(crate) fn is_precondition_error<E>(error: &SdkError<E>) -> bool {
-    error
+pub(crate) fn is_precondition_error<E: ProvideErrorMetadata>(
+    error: &SdkError<E>,
+    is_replace_if_etag_matches: bool,
+) -> bool {
+    let status = error
         .raw_response()
-        .is_some_and(|response| response.status().as_u16() == 412)
+        .map(|response| response.status().as_u16());
+    status == Some(412)
+        || (is_replace_if_etag_matches
+            && status == Some(404)
+            && error
+                .as_service_error()
+                .and_then(ProvideErrorMetadata::code)
+                == Some("NoSuchKey"))
 }
 
 pub(crate) fn is_conflict_error(error: &ObjectStoreError) -> bool {

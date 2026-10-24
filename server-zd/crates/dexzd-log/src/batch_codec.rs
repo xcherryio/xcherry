@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use dexzd_keyspace::validate_node_identifier;
 use dexzd_object_store::{ByteRange, ObjectStore};
 use dexzd_protocol::dexzd::v1::{LogBatchHeader, LogEpochStart, LogPartitionFrame};
 use prost::Message;
@@ -21,7 +22,8 @@ const FORMAT_VERSION: u16 = 1;
 const PREFIX_LENGTH: usize = 14;
 const TRAILER_LENGTH: usize = 16;
 const MAX_HEADER_LENGTH: usize = 1_048_576;
-const MAX_UNCOMPRESSED_FRAME_LENGTH: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_UNCOMPRESSED_FRAME_LENGTH: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_RECORD_LENGTH: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum LogError {
@@ -78,7 +80,9 @@ pub struct DecodedBatch {
 }
 
 pub fn encode_batch(content: &BatchContent) -> Result<Bytes, LogError> {
-    if content.stream.node_id.is_empty() || content.seq == 0 || content.epoch == 0 {
+    validate_node_identifier(&content.stream.node_id)
+        .map_err(|error| LogError::Invalid(error.to_string()))?;
+    if content.seq == 0 || content.epoch == 0 {
         return Err(LogError::Invalid(
             "stream identity, epoch, and seq must be set".into(),
         ));
@@ -93,6 +97,9 @@ pub fn encode_batch(content: &BatchContent) -> Result<Bytes, LogError> {
     }
     let mut grouped = BTreeMap::<u32, Vec<&Bytes>>::new();
     for record in &content.records {
+        if record.bytes.len() > MAX_RECORD_LENGTH {
+            return Err(LogError::Invalid("record exceeds maximum length".into()));
+        }
         grouped
             .entry(record.partition)
             .or_default()
@@ -103,6 +110,11 @@ pub fn encode_batch(content: &BatchContent) -> Result<Bytes, LogError> {
     for (partition, records) in grouped {
         let mut plain = BytesMut::new();
         for record in &records {
+            if plain.len() + encoded_record_length(record.len()) > MAX_UNCOMPRESSED_FRAME_LENGTH {
+                return Err(LogError::Invalid(format!(
+                    "partition {partition} frame exceeds maximum length"
+                )));
+            }
             prost::encoding::encode_varint(record.len() as u64, &mut plain);
             plain.extend_from_slice(record);
         }
@@ -174,8 +186,8 @@ pub fn encode_batch(content: &BatchContent) -> Result<Bytes, LogError> {
 }
 
 pub fn decode_batch(body: &[u8]) -> Result<DecodedBatch, LogError> {
-    let header = decode_header(body)?;
-    let frames_end = validate_header(&header, body.len() as u64)?;
+    let (header, header_length) = decode_header(body)?;
+    let frames_end = validate_header(&header, header_length, body.len() as u64)?;
     if frames_end as usize + TRAILER_LENGTH != body.len() {
         return Err(LogError::Corrupt(
             "trailer is not immediately after frames".into(),
@@ -219,8 +231,8 @@ pub async fn read_partition_records(
     else {
         return Ok(None);
     };
-    let header = decode_header(&prefix.bytes)?;
-    validate_header(&header, prefix.object_size)?;
+    let (header, header_length) = decode_header(&prefix.bytes)?;
+    validate_header(&header, header_length, prefix.object_size)?;
     let Some(index) = header
         .partition_frames
         .iter()
@@ -251,7 +263,7 @@ pub async fn read_partition_records(
     Ok(Some((header, records)))
 }
 
-fn decode_header(body: &[u8]) -> Result<LogBatchHeader, LogError> {
+fn decode_header(body: &[u8]) -> Result<(LogBatchHeader, usize), LogError> {
     if body.len() < PREFIX_LENGTH || &body[..8] != MAGIC {
         return Err(LogError::Corrupt(
             "invalid batch magic or short prefix".into(),
@@ -270,13 +282,18 @@ fn decode_header(body: &[u8]) -> Result<LogBatchHeader, LogError> {
             "invalid or truncated batch header".into(),
         ));
     }
-    LogBatchHeader::decode(&body[PREFIX_LENGTH..PREFIX_LENGTH + length])
-        .map_err(|error| LogError::Corrupt(format!("decode batch header: {error}")))
+    let header = LogBatchHeader::decode(&body[PREFIX_LENGTH..PREFIX_LENGTH + length])
+        .map_err(|error| LogError::Corrupt(format!("decode batch header: {error}")))?;
+    Ok((header, length))
 }
 
-fn validate_header(header: &LogBatchHeader, object_size: u64) -> Result<u64, LogError> {
+fn validate_header(
+    header: &LogBatchHeader,
+    header_length: usize,
+    object_size: u64,
+) -> Result<u64, LogError> {
     if header.cluster_id.len() != 16
-        || header.node_id.is_empty()
+        || validate_node_identifier(&header.node_id).is_err()
         || header.seq == 0
         || header.epoch == 0
     {
@@ -294,7 +311,6 @@ fn validate_header(header: &LogBatchHeader, object_size: u64) -> Result<u64, Log
     } else if header.record_count == 0 {
         return Err(LogError::Corrupt("ordinary batch has no records".into()));
     }
-    let header_length = header.encoded_len();
     let mut next_offset = (PREFIX_LENGTH + header_length) as u64;
     let mut previous_partition = None;
     let mut record_count = 0_u64;
@@ -302,7 +318,7 @@ fn validate_header(header: &LogBatchHeader, object_size: u64) -> Result<u64, Log
         if previous_partition.is_some_and(|previous| index.partition <= previous)
             || index.byte_offset != next_offset
             || index.compressed_length == 0
-            || index.uncompressed_length > MAX_UNCOMPRESSED_FRAME_LENGTH
+            || index.uncompressed_length > MAX_UNCOMPRESSED_FRAME_LENGTH as u64
             || u64::from(index.record_count) > index.uncompressed_length
         {
             return Err(LogError::Corrupt("invalid partition frame index".into()));
@@ -321,6 +337,10 @@ fn validate_header(header: &LogBatchHeader, object_size: u64) -> Result<u64, Log
         ));
     }
     Ok(next_offset)
+}
+
+pub(crate) fn encoded_record_length(record_length: usize) -> usize {
+    record_length + prost::encoding::encoded_len_varint(record_length as u64)
 }
 
 fn decode_frame(

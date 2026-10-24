@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use dexzd_keyspace::PartitionHashError;
+use dexzd_keyspace::{NodeIdentifierError, PartitionHashError};
 use dexzd_object_store::ObjectStoreError;
 
 /// Failure to read or change cluster metadata.
@@ -37,6 +37,23 @@ pub enum MetadataError {
     /// Partition hash parameters are invalid.
     #[error(transparent)]
     PartitionHash(#[from] PartitionHashError),
+    /// A configured node ID cannot appear in object keys.
+    #[error(transparent)]
+    InvalidNodeIdentifier(#[from] NodeIdentifierError),
+    /// A metadata setting is invalid.
+    #[error("invalid {field} configuration: {detail}")]
+    InvalidConfig {
+        /// Configured field.
+        field: &'static str,
+        /// Rejection reason.
+        detail: String,
+    },
+    /// The operating system could not supply random bytes.
+    #[error("OS random generator failed: {detail}")]
+    RandomSource {
+        /// Random source error.
+        detail: String,
+    },
     /// A metadata value violates the persistent format.
     #[error("invalid {key} metadata: {detail}")]
     InvalidMetadata {
@@ -44,6 +61,14 @@ pub enum MetadataError {
         key: &'static str,
         /// Invalid content or configuration.
         detail: String,
+    },
+    /// This binary cannot safely update a manifest with a newer version barrier.
+    #[error("unsupported version barrier: behavior {behavior_version}, format {format_version}")]
+    UnsupportedVersionBarrier {
+        /// Barrier behavior version.
+        behavior_version: u32,
+        /// Barrier format version.
+        format_version: u32,
     },
     /// A required object is absent.
     #[error("{key} metadata is missing")]

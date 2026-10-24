@@ -15,7 +15,7 @@ use dex_sdk::Registry;
 use crate::heartbeat_recovery_workflow::{
     HEARTBEAT_PROGRESS, HeartbeatRecoveryWorkflow, NoOutputHeartbeatTimeoutWorkflow,
 };
-use crate::support::{DexDevTestEnvironment, flow_id};
+use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 
 #[test]
 #[ignore = "requires dexcli dev"]
@@ -61,6 +61,9 @@ fn test_heartbeat_recovery_and_local_fallback() {
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_no_output_handler_reaches_heartbeat_timeout() {
+    if skip_if_server_zd("Step failure policies") {
+        return;
+    }
     let workflow = NoOutputHeartbeatTimeoutWorkflow::new();
     let environment = DexDevTestEnvironment::start(Registry::new().register(workflow.clone()));
     let flow_id = flow_id("rust-heartbeat-timeout");

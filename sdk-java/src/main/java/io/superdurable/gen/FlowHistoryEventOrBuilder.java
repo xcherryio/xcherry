@@ -32,6 +32,16 @@ public interface FlowHistoryEventOrBuilder extends
   com.google.protobuf.TimestampOrBuilder getEventTimeOrBuilder();
 
   /**
+   * <pre>
+   * server-zd only: the run attempt that recorded this event.
+   * </pre>
+   *
+   * <code>int32 run_attempt = 3;</code>
+   * @return The runAttempt.
+   */
+  int getRunAttempt();
+
+  /**
    * <code>.dex.FlowStartedOrContinuedHistoryEvent flow_started_or_continued = 20;</code>
    * @return Whether the flowStartedOrContinued field is set.
    */

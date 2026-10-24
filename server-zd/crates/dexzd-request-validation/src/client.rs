@@ -7,17 +7,18 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use dexzd_protocol::dex::{
-    AttributeMatch, DeleteChannelMessageRequest, FlowConfig, InvokeRpcRequest,
-    PublishToChannelRequest, ResetFlowRequest, SetAttributesRequest, SkipTimerRequest,
-    StartFlowRequest, UpdateFlowConfigRequest, WaitForAttributeRequest,
-    WaitForStepCompletionRequest, value,
+    AttributeMatch, AttributeMatchOperator, DeleteChannelMessageRequest, FlowResetStepMethod,
+    FlowResetType, IdReusePolicy, InvokeRpcRequest, PublishToChannelRequest, ResetFlowRequest,
+    SetAttributesRequest, SkipTimerRequest, StartFlowRequest, UpdateFlowConfigRequest,
+    WaitForAttributeRequest, WaitForStepCompletionRequest, value,
 };
 
 use crate::shared::{
-    ValidationCategory, ValidationConfig, ValidationError, invalid, validate_action_permissions,
-    validate_attribute_writes, validate_blob_value, validate_flow_config,
-    validate_flow_timeout_policy, validate_identifier, validate_start_options,
-    validate_state_selections, validate_step_options, validate_timeout_handler,
+    ValidationCategory, ValidationConfig, ValidationError, apply_flow_config_override, invalid,
+    validate_action_permissions, validate_attribute_writes, validate_blob_value,
+    validate_flow_config, validate_flow_timeout_policy, validate_identifier,
+    validate_start_options, validate_state_selections, validate_step_options,
+    validate_timeout_handler,
 };
 
 /// A supported public client request before the API proposes its command.
@@ -124,7 +125,7 @@ fn validate_start_flow(
         true,
     )?;
     if let Some(options) = options {
-        if !(0..=4).contains(&options.id_reuse_policy) {
+        if IdReusePolicy::try_from(options.id_reuse_policy).is_err() {
             return Err(invalid(
                 "flow_start_options.id_reuse_policy",
                 "unknown ID reuse policy",
@@ -137,32 +138,6 @@ fn validate_start_flow(
         )?;
     }
     Ok(())
-}
-
-fn apply_flow_config_override(effective: &mut FlowConfig, override_config: &FlowConfig) {
-    if override_config.active_step_search_mode.is_some() {
-        effective.active_step_search_mode = override_config.active_step_search_mode;
-    }
-    if override_config.continue_as_new_threshold.is_some() {
-        effective.continue_as_new_threshold = override_config.continue_as_new_threshold;
-    }
-    if override_config.continue_as_new_page_size_in_bytes.is_some() {
-        effective.continue_as_new_page_size_in_bytes =
-            override_config.continue_as_new_page_size_in_bytes;
-    }
-    if override_config.step_durability.is_some() {
-        effective.step_durability = override_config.step_durability;
-    }
-    if override_config.worker_target.is_some() {
-        effective
-            .worker_target
-            .clone_from(&override_config.worker_target);
-    }
-    if override_config.attribute_store_names.is_some() {
-        effective
-            .attribute_store_names
-            .clone_from(&override_config.attribute_store_names);
-    }
 }
 
 fn validate_set_attributes(
@@ -271,48 +246,51 @@ fn validate_reset_flow(request: &ResetFlowRequest) -> Result<(), ValidationError
     if request.flow_id.is_empty() {
         return Err(invalid("flow_id", "flow ID is required"));
     }
-    match request.reset_type {
-        1 => {
-            if request.step_method != 0 {
+    match FlowResetType::try_from(request.reset_type) {
+        Ok(FlowResetType::Beginning) => {
+            if request.step_method != FlowResetStepMethod::Unspecified as i32 {
                 return Err(invalid(
                     "step_method",
                     "step method is only valid for a Step execution ID",
                 ));
             }
         }
-        2 => {
+        Ok(FlowResetType::HistoryEventTime) => {
             if request.history_event_time.is_empty() {
                 return Err(invalid(
                     "history_event_time",
                     "history event time is required",
                 ));
             }
-            if request.step_method != 0 {
+            if request.step_method != FlowResetStepMethod::Unspecified as i32 {
                 return Err(invalid(
                     "step_method",
                     "step method is only valid for a Step execution ID",
                 ));
             }
         }
-        3 => {
+        Ok(FlowResetType::StepType) => {
             if request.step_type.is_empty() {
                 return Err(invalid("step_type", "step type is required"));
             }
-            if request.step_method != 0 {
+            if request.step_method != FlowResetStepMethod::Unspecified as i32 {
                 return Err(invalid(
                     "step_method",
                     "step method is only valid for a Step execution ID",
                 ));
             }
         }
-        4 => {
+        Ok(FlowResetType::StepExecutionId) => {
             if request.step_execution_id.is_empty() {
                 return Err(invalid(
                     "step_execution_id",
                     "step execution ID is required",
                 ));
             }
-            if request.step_method != 1 && request.step_method != 2 {
+            if !matches!(
+                FlowResetStepMethod::try_from(request.step_method),
+                Ok(FlowResetStepMethod::WaitFor | FlowResetStepMethod::Execute)
+            ) {
                 return Err(invalid(
                     "step_method",
                     "step method must be WaitFor or Execute",
@@ -366,7 +344,10 @@ fn validate_attribute_match(attribute_match: &AttributeMatch) -> Result<(), Vali
             "attribute match key, operator, and scalar operand are required",
         ));
     }
-    if !(1..=6).contains(&attribute_match.operator) {
+    if !matches!(
+        AttributeMatchOperator::try_from(attribute_match.operator),
+        Ok(operator) if operator != AttributeMatchOperator::Unspecified
+    ) {
         return Err(invalid(
             "match.operator",
             "attribute match operator is invalid",
@@ -380,7 +361,13 @@ fn validate_attribute_match(attribute_match: &AttributeMatch) -> Result<(), Vali
     })?;
     match operand.kind.as_ref() {
         Some(value::Kind::StringValue(_) | value::Kind::BoolValue(_)) => {
-            if attribute_match.operator >= 3 {
+            if matches!(
+                AttributeMatchOperator::try_from(attribute_match.operator),
+                Ok(AttributeMatchOperator::GreaterThan
+                    | AttributeMatchOperator::GreaterThanOrEqual
+                    | AttributeMatchOperator::LessThan
+                    | AttributeMatchOperator::LessThanOrEqual)
+            ) {
                 return Err(invalid(
                     "match.operand",
                     "attribute match ordering requires an integer or double operand",

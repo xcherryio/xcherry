@@ -18,8 +18,12 @@ Snapshots use RocksDB checkpoints or one serialized memory file. All files are u
 with CreateOnly under the node and lineage, and a manifest is written last. Restore
 checks every file's size and xxh3-64 checksum before opening the store and assigning
 a new UUIDv7 lineage. The caller supplies snapshot timestamps from its wall clock.
+Run `create_snapshot` and `restore_snapshot` on the engine's blocking pool: checkpoint,
+file enumeration, checksums, and local store open are synchronous even while object I/O
+is asynchronous.
 Retention keeps the newest three manifests by default; callers pass the retention
-count and deletion delay to `retain_snapshots`.
+count and deletion delay to `retain_snapshots`. Do not run retention concurrently
+with snapshot creation for the same lineage.
 
 The future `dexzd-apply::FlowStateReader` adapter belongs over `consistent_view()`.
 Its contract has not been defined yet.
