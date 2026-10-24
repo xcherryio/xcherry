@@ -11,6 +11,7 @@
 mod command_applier;
 mod commit;
 mod effects;
+mod engine_id_source;
 mod engine_node;
 mod long_poll;
 mod recovery;
@@ -30,6 +31,7 @@ pub use effects::{
     MethodRequest, NodeMetaUploadLedger, decode_hard_delete_value, encode_hard_delete_value,
     hard_delete_placeholder_value,
 };
+pub use engine_id_source::{EngineIdSource, SystemEngineIdSource};
 pub use engine_node::{EngineNode, EngineNodeConfig, EngineNodeDependencies};
 pub use long_poll::{
     ATTRIBUTE_REQUEST_TIMEOUT_MESSAGE, STEP_COMPLETION_REQUEST_TIMEOUT_MESSAGE,

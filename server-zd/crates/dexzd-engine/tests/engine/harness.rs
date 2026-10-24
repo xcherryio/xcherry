@@ -21,6 +21,7 @@ use dexzd_engine::{
     CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig, EngineNodeDependencies,
     EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
     PartitionRuntimeRebuilder, RecoveryConfig, RuntimeRebuildError, SnapshotConfig,
+    SystemEngineIdSource,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
@@ -539,6 +540,7 @@ impl TestCluster {
                 object_store: self.object_store.clone(),
                 clock: self.clock.clone(),
                 applier: applier.clone(),
+                id_source: Arc::new(SystemEngineIdSource),
             },
             move |_services: EngineServices| EngineRuntimeHooks {
                 committed_commands: factory_runtime.clone(),

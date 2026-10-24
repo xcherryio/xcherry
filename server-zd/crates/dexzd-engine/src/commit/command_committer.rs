@@ -15,7 +15,6 @@ use dexzd_keyspace::PartitionId;
 use dexzd_protocol::dexzd::v1::{FlowCommand, LogRecord, log_record};
 use prost::Message;
 use tokio::sync::{Semaphore, mpsc};
-use uuid::Uuid;
 
 use crate::commit::EngineLocalStore;
 use crate::commit::commit_state::{
@@ -23,6 +22,7 @@ use crate::commit::commit_state::{
 };
 use crate::commit::committed_state_view::CommittedStateView;
 use crate::commit::replay_checks::{ReplayMismatch, compare_speculative_outcome};
+use crate::engine_id_source::EngineIdSource;
 use crate::runtime::{
     CommitError, CommitTicket, CommitUrgency, CommittedCommand, FlowCommandCommitter,
 };
@@ -48,6 +48,7 @@ struct CommitterInner {
     state: Arc<CommitState>,
     store: Arc<EngineLocalStore>,
     clock: Arc<dyn WallClock>,
+    id_source: Arc<dyn EngineIdSource>,
     epoch: u64,
     behavior_version: u32,
     admission: Arc<Semaphore>,
@@ -59,6 +60,7 @@ pub(crate) struct CommandCommitterParts {
     pub(crate) state: Arc<CommitState>,
     pub(crate) store: Arc<EngineLocalStore>,
     pub(crate) clock: Arc<dyn WallClock>,
+    pub(crate) id_source: Arc<dyn EngineIdSource>,
     pub(crate) epoch: u64,
     pub(crate) behavior_version: u32,
     pub(crate) max_unapplied_bytes: u32,
@@ -74,6 +76,7 @@ impl CommandCommitter {
                 state: parts.state,
                 store: parts.store,
                 clock: parts.clock,
+                id_source: parts.id_source,
                 epoch: parts.epoch,
                 behavior_version: parts.behavior_version,
                 admission: Arc::new(Semaphore::new(parts.max_unapplied_bytes as usize)),
@@ -120,7 +123,7 @@ impl CommandCommitter {
         if inner.state.is_partition_halted(partition) {
             return Err(partition_stopped_error(partition));
         }
-        let command_id = Uuid::now_v7().as_bytes().to_vec();
+        let command_id = inner.id_source.command_id().as_bytes().to_vec();
         command.epoch = inner.epoch;
         command.behavior_version = inner.behavior_version;
         command.command_id.clone_from(&command_id);
