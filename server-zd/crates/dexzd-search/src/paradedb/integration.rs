@@ -165,11 +165,11 @@ async fn paradedb_matches_builtin_evaluator() {
         .with("tags", SearchValue::StringArray(Vec::new())),
     ];
     let (registry, application_fields) = fields();
-    let tenant_id = TenantId(1);
-    let tenant_column = tenant_column_value(tenant_id);
+    let parity_tenant_id = TenantId(3);
+    let parity_tenant_column = tenant_column_value(parity_tenant_id);
     let mut rows = BTreeMap::new();
     for document in &documents {
-        let row = SearchRow::from_document(tenant_id, 1, document, &application_fields)
+        let row = SearchRow::from_document(parity_tenant_id, 1, document, &application_fields)
             .expect("map document");
         let statement = upsert_statement(&row);
         client
@@ -185,7 +185,7 @@ async fn paradedb_matches_builtin_evaluator() {
         1_000_000_000,
         Some(2_000_000_000),
     );
-    let other_row = SearchRow::from_document(TenantId(2), 1, &other_tenant, &application_fields)
+    let other_row = SearchRow::from_document(TenantId(4), 1, &other_tenant, &application_fields)
         .expect("map other tenant");
     let statement = upsert_statement(&other_row);
     client
@@ -207,7 +207,7 @@ async fn paradedb_matches_builtin_evaluator() {
     }
     let keyword: String = client.query_one(
         "SELECT sa_keyword ->> 'keyword' FROM dexzd_visibility_runs WHERE tenant_id = $1::text AND run_id = 'r1'",
-        &[&tenant_column],
+        &[&parity_tenant_column],
     ).await.expect("read guarded row").get(0);
     assert_eq!(keyword, "red");
 
@@ -254,8 +254,8 @@ async fn paradedb_matches_builtin_evaluator() {
                 _ => panic!("test run must have an ID"),
             })
             .collect();
-        let statement =
-            translate_query(&query, &tenant_column, 100, None).expect("translate checked query");
+        let statement = translate_query(&query, &parity_tenant_column, 100, None)
+            .expect("translate checked query");
         let actual = client
             .query(&statement.sql, &statement.parameter_refs())
             .await
@@ -278,7 +278,7 @@ async fn paradedb_matches_builtin_evaluator() {
                 _ => panic!("test run must have an ID"),
             })
             .collect();
-        let first = translate_query(&query, &tenant_column, 2, None).expect("first page");
+        let first = translate_query(&query, &parity_tenant_column, 2, None).expect("first page");
         let first_page = client
             .query(&first.sql, &first.parameter_refs())
             .await
@@ -286,7 +286,8 @@ async fn paradedb_matches_builtin_evaluator() {
         assert_eq!(first_page.len(), 2);
         let last_id: String = first_page[1].get("run_id");
         let cursor = PageCursor::from_row(rows.get(&last_id).expect("cursor row"));
-        let next = translate_query(&query, &tenant_column, 2, Some(&cursor)).expect("next page");
+        let next =
+            translate_query(&query, &parity_tenant_column, 2, Some(&cursor)).expect("next page");
         let next_page = client
             .query(&next.sql, &next.parameter_refs())
             .await
@@ -299,6 +300,7 @@ async fn paradedb_matches_builtin_evaluator() {
         assert_eq!(actual_ids, expected_ids, "{order}");
     }
 
+    let tenant_id = TenantId(1);
     let first_run_id = "00000000-0000-0000-0000-000000000001";
     let second_run_id = "00000000-0000-0000-0000-000000000002";
     for document in [
