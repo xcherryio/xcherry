@@ -10,7 +10,7 @@
 //! timeouts, exhausted retries, ID reuse termination) goes through [`close_flow`].
 
 use dexzd_keyspace::ColumnFamily;
-use dexzd_keyspace::row_keys::active_work_index_key;
+use dexzd_keyspace::row_keys::{active_work_index_key, retention_index_key};
 use dexzd_protocol::dex::{FlowErrorType, FlowStatus, StepCompletionOutput};
 use dexzd_protocol::dexzd::v1::{
     FlowTimeoutTimerId, RetentionTimerId, StepExecutionPhase, TimerId, timer_id,
@@ -143,6 +143,16 @@ pub(crate) fn close_flow(
         retention_deadline,
     );
     let partition = transaction.context().partition;
+    transaction.put(
+        ColumnFamily::PartitionIndex,
+        retention_index_key(
+            partition,
+            retention_deadline,
+            cursor.rows.flow_hash,
+            cursor.run_id(),
+        ),
+        Vec::new(),
+    );
     transaction.delete(
         ColumnFamily::PartitionIndex,
         active_work_index_key(partition, cursor.rows.flow_hash, cursor.run_id()),

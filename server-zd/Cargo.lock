@@ -1154,6 +1154,7 @@ dependencies = [
  "dexzd-object-store",
  "dexzd-protocol",
  "dexzd-storage",
+ "prost",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "thiserror",
