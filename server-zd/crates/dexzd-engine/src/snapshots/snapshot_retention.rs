@@ -180,9 +180,17 @@ impl SnapshotRetention {
             let Some(current_file) = self.object_store.head(key).await? else {
                 continue;
             };
+            if current_file.last_modified_unix_micros.is_none() {
+                *first_seen = OrphanMark {
+                    etag: current_file.etag,
+                    first_seen_unix_micros: now_unix_micros,
+                    scan_number: catalog.completed_scan_number,
+                };
+                continue;
+            }
             let current_written_at = current_file
                 .last_modified_unix_micros
-                .unwrap_or(first_seen.first_seen_unix_micros);
+                .expect("checked above");
             if current_file.etag == listed_file.etag
                 && now_unix_micros.saturating_sub(current_written_at) >= delay_micros
             {
@@ -314,13 +322,16 @@ fn creation_order(manifest: &SnapshotManifest) -> (i64, &[u8], u64) {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use async_trait::async_trait;
     use bytes::Bytes;
     use dexzd_clock::SystemWallClock;
     use dexzd_object_store::{
-        InMemoryObjectStore, ObjectStore, ObjectStoreOperation, WriteCondition,
+        ByteRange, InMemoryObjectStore, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore,
+        ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
     };
     use dexzd_protocol::dexzd::v1::{SnapshotFile, SnapshotManifest};
     use prost::Message;
@@ -331,6 +342,143 @@ mod tests {
     use crate::snapshots::ownership_fence::OwnershipFence;
 
     use super::{CANDIDATES_PER_RUN, SnapshotCatalog, SnapshotRetention};
+
+    struct MetadataWithoutTimestamp {
+        inner: Arc<InMemoryObjectStore>,
+    }
+
+    #[async_trait]
+    impl ObjectStore for MetadataWithoutTimestamp {
+        async fn put(
+            &self,
+            key: &str,
+            body: Bytes,
+            condition: WriteCondition,
+        ) -> ObjectStoreResult<WriteOutcome> {
+            self.inner.put(key, body, condition).await
+        }
+
+        async fn put_file(
+            &self,
+            key: &str,
+            path: &Path,
+            condition: WriteCondition,
+        ) -> ObjectStoreResult<WriteOutcome> {
+            self.inner.put_file(key, path, condition).await
+        }
+
+        async fn get(&self, key: &str) -> ObjectStoreResult<Option<ObjectContent>> {
+            self.inner.get(key).await
+        }
+
+        async fn get_range(
+            &self,
+            key: &str,
+            range: ByteRange,
+        ) -> ObjectStoreResult<Option<ObjectContent>> {
+            self.inner.get_range(key, range).await
+        }
+
+        async fn get_to_file(&self, key: &str, path: &Path) -> ObjectStoreResult<Option<u64>> {
+            self.inner.get_to_file(key, path).await
+        }
+
+        async fn head(&self, key: &str) -> ObjectStoreResult<Option<ObjectMetadata>> {
+            Ok(self.inner.head(key).await?.map(|mut metadata| {
+                metadata.etag = "stable".to_owned();
+                metadata.last_modified_unix_micros = None;
+                metadata
+            }))
+        }
+
+        async fn delete(&self, key: &str) -> ObjectStoreResult<()> {
+            self.inner.delete(key).await
+        }
+
+        async fn delete_many(&self, keys: &[String]) -> ObjectStoreResult<()> {
+            self.inner.delete_many(keys).await
+        }
+
+        async fn list(
+            &self,
+            prefix: &str,
+            start_after: Option<&str>,
+            max_keys: u32,
+        ) -> ObjectStoreResult<ObjectListing> {
+            let mut listing = self.inner.list(prefix, start_after, max_keys).await?;
+            for metadata in &mut listing.objects {
+                metadata.etag = "stable".to_owned();
+                metadata.last_modified_unix_micros = None;
+            }
+            Ok(listing)
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_head_timestamp_resets_rewritten_key_eligibility() {
+        let inner = Arc::new(InMemoryObjectStore::new());
+        let object_store = Arc::new(MetadataWithoutTimestamp {
+            inner: inner.clone(),
+        });
+        let orphan_key = "snapshot/node-a/lineage/files/orphan";
+        inner
+            .put(
+                orphan_key,
+                Bytes::from_static(b"first"),
+                WriteCondition::CreateOnly,
+            )
+            .await
+            .expect("upload first version");
+        let state = Arc::new(CommitState::new(1));
+        assert!(state.start_serving());
+        let fence = OwnershipFence {
+            object_store: object_store.clone(),
+            clock: Arc::new(SystemWallClock),
+            state,
+            node_id: "node-a".to_owned(),
+            epoch: 1,
+        };
+        let retention = SnapshotRetention {
+            object_store,
+            node_id: "node-a".to_owned(),
+            retained_count: 3,
+            deletion_delay: Duration::from_micros(1),
+        };
+        let mut catalog = SnapshotCatalog::default();
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX / 2)
+            .await
+            .expect("mark first version");
+        let current_etag = inner
+            .head(orphan_key)
+            .await
+            .expect("head first version")
+            .expect("first version exists")
+            .etag;
+        inner
+            .put(
+                orphan_key,
+                Bytes::from_static(b"second"),
+                WriteCondition::ReplaceIfEtagMatches { etag: current_etag },
+            )
+            .await
+            .expect("rewrite key");
+        retention
+            .run_once(&mut catalog, &BTreeSet::new(), &fence, i64::MAX)
+            .await
+            .expect("inspect rewritten version");
+        assert!(
+            inner
+                .get(orphan_key)
+                .await
+                .expect("read rewritten key")
+                .is_some()
+        );
+        assert_eq!(
+            catalog.orphan_first_seen[orphan_key].first_seen_unix_micros,
+            i64::MAX
+        );
+    }
 
     #[tokio::test]
     async fn orphan_sweep_limits_head_and_delete_work_per_pass() {
