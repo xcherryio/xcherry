@@ -15,6 +15,7 @@ mod node_streams;
 mod runtime_rebuild;
 
 pub use local_store_opening::LocalStoreConfig;
+pub use log_replay::RecoveryConfig;
 pub use runtime_rebuild::{
     CommittedCommandSink, EngineRuntimeHooks, EngineServices, PartitionRuntimeRebuilder,
     RuntimeRebuildError,

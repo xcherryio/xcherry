@@ -20,7 +20,7 @@ use dexzd_engine::{
     CommandApplier, CommitConfig, CommitError, CommitTicket, CommitUrgency, CommittedCommandSink,
     CommittedFlowCommand, CommittedStateView, EngineNode, EngineNodeConfig, EngineNodeDependencies,
     EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
-    PartitionRuntimeRebuilder, RuntimeRebuildError, SnapshotConfig,
+    PartitionRuntimeRebuilder, RecoveryConfig, RuntimeRebuildError, SnapshotConfig,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, PartitionId, TenantId, flow_directory_key, flow_directory_prefix,
@@ -346,6 +346,8 @@ pub(crate) struct SwitchableFaults {
     /// Key whose writes fail once the remaining count of allowed writes is zero.
     limited_put: Mutex<Option<(String, usize)>>,
     delayed: Mutex<Option<DelayedOperation>>,
+    /// Key prefix and delay applied to every read under it.
+    delayed_gets: Mutex<Option<(String, Duration)>>,
     delayed_entered: Notify,
     operations: Mutex<Vec<(ObjectStoreOperation, String)>>,
 }
@@ -364,6 +366,12 @@ impl SwitchableFaults {
         *self.failing_put_prefix.lock().expect("fault lock") = None;
         *self.limited_put.lock().expect("fault lock") = None;
         *self.delayed.lock().expect("fault lock") = None;
+        *self.delayed_gets.lock().expect("fault lock") = None;
+    }
+
+    /// Delays every read of a key under `prefix` by `delay` until cleared.
+    pub(crate) fn delay_every_get_under(&self, prefix: &str, delay: Duration) {
+        *self.delayed_gets.lock().expect("fault lock") = Some((prefix.to_owned(), delay));
     }
 
     /// Delays the next read of exactly `key` by `delay`.
@@ -449,6 +457,12 @@ impl FaultInjector for SwitchableFaults {
             self.delayed_entered.notify_one();
             return FaultAction::Delay(delayed.delay);
         }
+        if operation == ObjectStoreOperation::Get
+            && let Some((prefix, delay)) = &*self.delayed_gets.lock().expect("fault lock")
+            && key.starts_with(prefix.as_str())
+        {
+            return FaultAction::Delay(*delay);
+        }
         if operation != ObjectStoreOperation::Put {
             return FaultAction::Proceed;
         }
@@ -508,6 +522,7 @@ impl TestCluster {
                 ..CommitConfig::default()
             },
             snapshots: SnapshotConfig::default(),
+            recovery: RecoveryConfig::default(),
         }
     }
 

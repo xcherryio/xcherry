@@ -63,6 +63,8 @@ pub struct EngineNodeConfig {
     pub commit: CommitConfig,
     /// Snapshots and log cleanup.
     pub snapshots: SnapshotConfig,
+    /// Log replay read-ahead and compaction after a bulk replay.
+    pub recovery: crate::recovery::RecoveryConfig,
 }
 
 /// Shared services the node runs on.
@@ -215,6 +217,7 @@ impl EngineNode {
             ));
             parts.appliers = Some(appliers.clone());
             let replayed = LogReplay {
+                config: &config.recovery,
                 object_store: object_store.as_ref(),
                 clock: clock.as_ref(),
                 cluster_id,
@@ -540,6 +543,10 @@ fn validate_config(config: &EngineNodeConfig) -> Result<(), EngineStartError> {
         Some("snapshots.retained_count must be positive")
     } else if snapshots.check_interval.is_zero() {
         Some("snapshots.check_interval must be positive")
+    } else if config.recovery.log_read_ahead.max_read_ahead_batches == 0 {
+        Some("recovery.log_read_ahead.max_read_ahead_batches must be positive")
+    } else if config.recovery.log_read_ahead.max_buffered_bytes == 0 {
+        Some("recovery.log_read_ahead.max_buffered_bytes must be positive")
     } else {
         None
     };

@@ -87,6 +87,11 @@ impl Config {
             "localStorage.blockCacheBytes",
             "must be positive",
         )?;
+        ensure(
+            self.local_storage.max_wal_bytes >= 64 * 1024 * 1024,
+            "localStorage.maxWalBytes",
+            "must be at least 64 MiB, the memtable size of one column family",
+        )?;
         if !self.dev.data_directory.as_os_str().is_empty() {
             ensure(
                 !self.dev.s3_data_directory.as_os_str().is_empty(),
@@ -146,6 +151,16 @@ impl Config {
         ensure(
             self.snapshot.log_deletion_delay > Duration::ZERO,
             "snapshot.logDeletionDelay",
+            "must be positive",
+        )?;
+        ensure(
+            (1..=1024).contains(&self.recovery.read_ahead_batches),
+            "recovery.readAheadBatches",
+            "must be between 1 and 1024",
+        )?;
+        ensure(
+            self.recovery.read_ahead_bytes > 0,
+            "recovery.readAheadBytes",
             "must be positive",
         )?;
         ensure(

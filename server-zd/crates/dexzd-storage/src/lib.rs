@@ -25,6 +25,8 @@ pub use snapshot::{
 };
 
 #[cfg(test)]
+mod compaction_tests;
+#[cfg(test)]
 mod snapshot_crash_tests;
 #[cfg(test)]
 mod tests;

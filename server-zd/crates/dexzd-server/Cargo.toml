@@ -21,6 +21,7 @@ dexzd-clock.workspace = true
 dexzd-cluster-metadata.workspace = true
 dexzd-engine.workspace = true
 dexzd-keyspace.workspace = true
+dexzd-log.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
 dexzd-request-validation.workspace = true

@@ -49,6 +49,10 @@ with its default. Set at least `cluster.nodeId`, `objectStore.bucket`, and
 `localStorage.directory`. Unknown keys and a `dev` section with non-default values fail startup.
 An invalid value fails startup with the YAML path of the rejected field.
 
+`localStorage.directory` needs room for the live state plus `localStorage.maxWalBytes` of RocksDB
+write-ahead log and up to four uncompacted 64 MiB level-0 files per column family. A compaction
+after a bulk replay returns the directory to about the live state size.
+
 Object storage uses `objectStore.endpoint` (empty for AWS endpoint resolution), `region`, `bucket`,
 `prefix`, and `forcePathStyle`. `objectStore.hardDeleteStore` optionally sends hard-delete values
 to a separate destination with the same keys; without it they use the primary bucket and prefix.
@@ -70,7 +74,11 @@ Startup proceeds in this order:
    process still holds is awaited until it expires, or fails startup when `lease.failIfHeld` is
    true.
 4. The node restores `localStorage.directory` from the latest snapshot and the command log. The
-   directory is a cache; an empty one is rebuilt from object storage.
+   directory is a cache; an empty one is rebuilt from object storage. Replay keeps up to
+   `recovery.readAheadBatches` log reads in flight, holding at most `recovery.readAheadBytes` of
+   log objects or one larger batch, and applies batches in log order as they arrive. After a
+   replay of at least `localStorage.compactAfterReplayBytes`, the local store is compacted in the
+   background while the node serves.
 5. After recovery and rebuild finish, health switches to SERVING and the API serves requests.
    Startup failure closes the listener.
 
