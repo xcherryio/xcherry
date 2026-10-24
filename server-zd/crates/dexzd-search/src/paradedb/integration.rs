@@ -200,6 +200,46 @@ async fn paradedb_matches_builtin_evaluator() {
             Some(10_000_000_000),
         )
         .with("number", SearchValue::Int(3)),
+        run(
+            "r9",
+            "flow-i",
+            "Completed",
+            9_000_000_000,
+            Some(14_000_000_000),
+        )
+        .with("number", SearchValue::Int(9_007_199_254_740_992)),
+        run(
+            "r10",
+            "flow-j",
+            "Completed",
+            10_000_000_000,
+            Some(15_000_000_000),
+        )
+        .with("number", SearchValue::Int(-9_007_199_254_740_992)),
+        run(
+            "r11",
+            "flow-k",
+            "Completed",
+            11_000_000_000,
+            Some(16_000_000_000),
+        )
+        .with("number", SearchValue::Int(i64::MAX - 1)),
+        run(
+            "r12",
+            "flow-l",
+            "Completed",
+            12_000_000_000,
+            Some(17_000_000_000),
+        )
+        .with("number", SearchValue::Int(i64::MAX)),
+        run(
+            "r13",
+            "flow-m",
+            "Completed",
+            13_000_000_000,
+            Some(18_000_000_000),
+        )
+        .with("number", SearchValue::Int(i64::MAX - 2)),
     ];
     let (registry, application_fields) = fields();
     let parity_tenant_id = TenantId(3);
@@ -271,11 +311,16 @@ async fn paradedb_matches_builtin_evaluator() {
         "number = '1e3'",
         "number = '9007199254740993'",
         "number = '9007199254740993.0'",
+        "number = '9007199254740992.5'",
+        "number = '-9007199254740992.5'",
         "number = '7.5'",
         "number IN ('7', '7.5')",
         "number > '7.5'",
         "number <= '-1.5'",
         "number BETWEEN '1.5' AND '3.5'",
+        "number >= '9223372036854775806.5'",
+        "number < '9223372036854775806.5'",
+        "number BETWEEN '9223372036854775806.5' AND '9223372036854775807'",
         "number != '7.5'",
         "number NOT IN ('7.5')",
         "NOT number = '7.5'",
@@ -353,14 +398,30 @@ async fn paradedb_matches_builtin_evaluator() {
         ("number = '1e3'", vec!["r7"]),
         ("number = '9007199254740993'", vec!["r5"]),
         ("number = '9007199254740993.0'", vec!["r5"]),
+        ("number = '9007199254740992.5'", vec!["r9"]),
+        ("number = '-9007199254740992.5'", vec!["r10"]),
         ("number = '7.5'", vec![]),
         ("number IN ('7', '7.5')", vec!["r2"]),
-        ("number > '7.5'", vec!["r5", "r7"]),
-        ("number <= '-1.5'", vec!["r6"]),
+        (
+            "number > '7.5'",
+            vec!["r5", "r7", "r9", "r11", "r12", "r13"],
+        ),
+        ("number <= '-1.5'", vec!["r6", "r10"]),
         ("number BETWEEN '1.5' AND '3.5'", vec!["r1", "r8"]),
+        ("number >= '9223372036854775806.5'", vec!["r11", "r12"]),
+        (
+            "number < '9223372036854775806.5'",
+            vec!["r1", "r2", "r3", "r5", "r6", "r7", "r8", "r9", "r10", "r13"],
+        ),
+        (
+            "number BETWEEN '9223372036854775806.5' AND '9223372036854775807'",
+            vec!["r11", "r12"],
+        ),
         (
             "number != '7.5'",
-            vec!["r1", "r2", "r3", "r5", "r6", "r7", "r8"],
+            vec![
+                "r1", "r2", "r3", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "r13",
+            ],
         ),
         ("double = '0x1p-2'", vec!["r5"]),
         ("double = '-0X1.8p1'", vec!["r6"]),

@@ -280,7 +280,7 @@ fn errors_have_byte_offsets_and_specific_reasons() {
 }
 
 #[test]
-fn quoted_int_decimals_are_exact_and_fractional_bounds_are_rewritten() {
+fn quoted_int_truncation_and_binary64_fractional_bounds_are_rewritten() {
     let seven = Document::default().with("int1", SearchValue::Int(7));
     let eight = Document::default().with("int1", SearchValue::Int(8));
     let negative_two = Document::default().with("int1", SearchValue::Int(-2));
@@ -342,6 +342,59 @@ fn quoted_int_decimals_are_exact_and_fractional_bounds_are_rewritten() {
 }
 
 #[test]
+fn quoted_int_binary64_boundaries_follow_elasticsearch_long_rules() {
+    let positive_half = Document::default().with("int1", SearchValue::Int(9_007_199_254_740_992));
+    let negative_half = Document::default().with("int1", SearchValue::Int(-9_007_199_254_740_992));
+    let below_max = Document::default().with("int1", SearchValue::Int(i64::MAX - 2));
+    let near_max = Document::default().with("int1", SearchValue::Int(i64::MAX - 1));
+    let max = Document::default().with("int1", SearchValue::Int(i64::MAX));
+
+    for query in [
+        "int1 = '9007199254740992.5'",
+        "int1 IN ('9007199254740992.5')",
+    ] {
+        assert!(evaluate(&check(query), &positive_half), "{query}");
+    }
+    assert!(evaluate(
+        &check("int1 = '-9007199254740992.5'"),
+        &negative_half
+    ));
+    assert!(evaluate(
+        &check("int1 >= '9223372036854775806.5'"),
+        &near_max
+    ));
+    assert!(evaluate(&check("int1 >= '9223372036854775806.5'"), &max));
+    assert!(!evaluate(
+        &check("int1 >= '9223372036854775806.5'"),
+        &below_max
+    ));
+    assert!(evaluate(
+        &check("int1 < '9223372036854775806.5'"),
+        &below_max
+    ));
+    assert!(!evaluate(
+        &check("int1 < '9223372036854775806.5'"),
+        &near_max
+    ));
+    let between = check("int1 BETWEEN '9223372036854775806.5' AND '9223372036854775807'");
+    assert!(evaluate(&between, &near_max));
+    assert!(evaluate(&between, &max));
+    assert!(!evaluate(&between, &below_max));
+    assert!(matches!(
+        check("int1 >= '9223372036854775806.5'").expression(),
+        Expression::Predicate(predicate)
+            if predicate.operator() == Operator::GreaterEqual
+                && matches!(predicate.literals(), [Literal::Int(value)] if *value == i64::MAX - 1)
+    ));
+    assert!(matches!(
+        check("int1 < '9223372036854775806.5'").expression(),
+        Expression::Predicate(predicate)
+            if predicate.operator() == Operator::LessEqual
+                && matches!(predicate.literals(), [Literal::Int(value)] if *value == i64::MAX - 2)
+    ));
+}
+
+#[test]
 fn quoted_int_rejects_invalid_and_out_of_range_values() {
     for value in [
         "0x1p2", "Inf", "NaN", "1_0", " 7", "7 ", "7d", "7f", "1e", ".", "",
@@ -362,6 +415,19 @@ fn quoted_int_rejects_invalid_and_out_of_range_values() {
         let query = format!("int1 = '{value}'");
         let error = parse_and_check(&query, &registry()).expect_err(&query);
         assert!(error.message.contains("out of range"), "{query}: {error}");
+    }
+    for query in [
+        format!("int1 = '{}'", "9".repeat(10_000)),
+        "int1 >= '1e400'".to_owned(),
+        "int1 < '9223372036854775808.5'".to_owned(),
+    ] {
+        let started = std::time::Instant::now();
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(error.message.contains("out of range"), "{error}");
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "literal parsing was too slow"
+        );
     }
 }
 

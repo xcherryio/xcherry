@@ -558,6 +558,11 @@ async fn quoted_numeric_bounds_and_hex_floats_match_indexed_values() {
         (3, -2, 1.5),
         (4, 1_000, 3.5),
         (5, 9_007_199_254_740_993, 2.5),
+        (6, 9_007_199_254_740_992, 0.0),
+        (7, -9_007_199_254_740_992, 0.0),
+        (8, i64::MAX - 1, 0.0),
+        (9, i64::MAX, 0.0),
+        (10, i64::MAX - 2, 0.0),
     ] {
         let mut flow = record(
             7,
@@ -586,7 +591,7 @@ async fn quoted_numeric_bounds_and_hex_floats_match_indexed_values() {
         state.insert(u16::from(ordinal), 7, ordinal, flow);
     }
     let backend =
-        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 6).expect("backend");
+        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 11).expect("backend");
     let mut fields = fields();
     fields.insert("Quantity", IndexType::Int);
     fields.insert("Amount", IndexType::Double);
@@ -595,14 +600,38 @@ async fn quoted_numeric_bounds_and_hex_floats_match_indexed_values() {
         ("Quantity = '1e3'", vec!["flow-4"]),
         ("Quantity = '9007199254740993'", vec!["flow-5"]),
         ("Quantity = '9007199254740993.0'", vec!["flow-5"]),
+        ("Quantity = '9007199254740992.5'", vec!["flow-6"]),
+        ("Quantity = '-9007199254740992.5'", vec!["flow-7"]),
         ("Quantity = '7.5'", vec![]),
         ("Quantity IN ('7', '7.5')", vec!["flow-1"]),
-        ("Quantity > '7.5'", vec!["flow-2", "flow-4", "flow-5"]),
-        ("Quantity <= '-1.5'", vec!["flow-3"]),
+        (
+            "Quantity > '7.5'",
+            vec![
+                "flow-2", "flow-4", "flow-5", "flow-6", "flow-8", "flow-9", "flow-10",
+            ],
+        ),
+        ("Quantity <= '-1.5'", vec!["flow-3", "flow-7"]),
         ("Quantity BETWEEN '1.5' AND '3.5'", vec![]),
         (
+            "Quantity >= '9223372036854775806.5'",
+            vec!["flow-8", "flow-9"],
+        ),
+        (
+            "Quantity < '9223372036854775806.5'",
+            vec![
+                "flow-1", "flow-2", "flow-3", "flow-4", "flow-5", "flow-6", "flow-7", "flow-10",
+            ],
+        ),
+        (
+            "Quantity BETWEEN '9223372036854775806.5' AND '9223372036854775807'",
+            vec!["flow-8", "flow-9"],
+        ),
+        (
             "Quantity != '7.5'",
-            vec!["flow-1", "flow-2", "flow-3", "flow-4", "flow-5"],
+            vec![
+                "flow-1", "flow-2", "flow-3", "flow-4", "flow-5", "flow-6", "flow-7", "flow-8",
+                "flow-9", "flow-10",
+            ],
         ),
         ("Amount = '0x1p-2'", vec!["flow-1"]),
         ("Amount = '-0X1.8p1'", vec!["flow-2"]),
