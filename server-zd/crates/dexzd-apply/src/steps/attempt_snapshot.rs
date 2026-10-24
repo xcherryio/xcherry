@@ -135,6 +135,10 @@ pub(crate) fn compute_attempt_snapshot(
         loaded_attribute_map_instances: selections.attribute_map_instances,
         loaded_channel_names: selections.channel_names,
         loaded_channel_map_instances: selections.channel_map_instances,
+        condition_results: match method {
+            StepMethod::Execute => step.condition_results.clone(),
+            StepMethod::WaitFor | StepMethod::Unspecified => None,
+        },
     })
 }
 
