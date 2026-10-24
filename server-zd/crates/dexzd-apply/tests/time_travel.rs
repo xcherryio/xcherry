@@ -1482,6 +1482,16 @@ fn reapplied_skip_timer_completes_the_restored_wait_or_is_skipped() {
             attempt
         )]
     );
+    // The reapplied skip made Execute pending, so the fork point is its target.
+    let fork_seq = harness.last_seq();
+    harness.travel_to(ResetFlowRequest {
+        run_attempt: attempt as i32,
+        step_execution_id: "ChargeStep-1".to_owned(),
+        step_method: FlowResetStepMethod::Execute as i32,
+        ..reset(FlowResetType::StepExecutionId)
+    });
+    let current_attempt = harness.run_record().current_attempt;
+    assert_eq!(harness.attempt_record(current_attempt).parent_seq, fork_seq);
     // At the beginning no timer is pending, so the recorded skip is skipped.
     let (beginning, outcome) = harness.travel_to(reapplying(reset(FlowResetType::Beginning)));
     let fork = harness.history_record(harness.last_seq()).unwrap();

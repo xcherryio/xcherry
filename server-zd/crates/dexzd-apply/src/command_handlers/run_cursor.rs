@@ -8,7 +8,9 @@
 
 use dexzd_keyspace::RunId;
 use dexzd_protocol::dex::{AttributeWrite, ErrorSubStatus, FlowHistoryEvent, flow_history_event};
-use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, HistoryRecord, RunRecord};
+use dexzd_protocol::dexzd::v1::{
+    CommandReply, FlowCommand, HistoryRecord, RunRecord, StepInvocationKey,
+};
 
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::{CommandScope, HandlerOutput, ReplayedCommandOutput};
@@ -59,6 +61,8 @@ pub(crate) struct RunCursor {
     pub(crate) history_window_page_used: bool,
     /// Set by TimeTravel: input it reapplied, recorded so later travels reapply it again.
     pub(crate) reapplied_inputs: Vec<FlowCommand>,
+    /// Set by TimeTravel: method calls its reapplied input made pending for the first time.
+    pub(crate) reapplied_pending_invocations: Vec<StepInvocationKey>,
 }
 
 impl RunCursor {
@@ -133,6 +137,7 @@ impl RunCursor {
             starts_attempt: false,
             history_window_page_used: false,
             reapplied_inputs: Vec::new(),
+            reapplied_pending_invocations: Vec::new(),
         }
     }
 
