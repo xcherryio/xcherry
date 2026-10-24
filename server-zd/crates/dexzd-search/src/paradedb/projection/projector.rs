@@ -12,7 +12,7 @@ use dexzd_apply::{FlowStateReader, StateReadError};
 use dexzd_keyspace::row_keys::{partition_index_range, run_singleton_key};
 use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionId, RunId, RunTable, TenantId};
 use dexzd_protocol::dex::IndexType;
-use dexzd_protocol::dexzd::v1::{LogPosition, SearchDocumentRecord};
+use dexzd_protocol::dexzd::v1::{LogPosition, RunRecord, SearchDocumentRecord};
 use prost::Message;
 use thiserror::Error;
 use tokio_postgres::Transaction;
@@ -439,6 +439,20 @@ fn read_rebuild_page(
     for (index_key, _) in rows {
         let (tenant_id, flow_hash, run_id) = decode_search_index_key(partition_id, &index_key)?
             .ok_or_else(|| ProjectionError::InvalidState("search index left partition".into()))?;
+        let run_record_key = run_singleton_key(flow_hash, run_id, RunTable::RunRecord);
+        let encoded_run_record = committed_view
+            .get(ColumnFamily::Flow, &run_record_key)?
+            .ok_or_else(|| {
+                ProjectionError::InvalidState(format!("missing committed run record for {run_id}"))
+            })?;
+        let run_record = RunRecord::decode(encoded_run_record.as_slice()).map_err(|error| {
+            ProjectionError::InvalidState(format!(
+                "decode committed run record for {run_id}: {error}"
+            ))
+        })?;
+        if run_record.is_purging {
+            continue;
+        }
         let document_key = run_singleton_key(flow_hash, run_id, RunTable::SearchDocument);
         let encoded_document = committed_view
             .get(ColumnFamily::Flow, &document_key)?

@@ -15,7 +15,7 @@ use dexzd_apply::{FlowStateReader, StateReadError, StateRow};
 use dexzd_keyspace::row_keys::{run_singleton_key, tenant_run_index_key};
 use dexzd_keyspace::{ColumnFamily, FlowHash, IndexKind, PartitionId, RunId, RunTable, TenantId};
 use dexzd_protocol::dex::FlowStatus;
-use dexzd_protocol::dexzd::v1::{LogPosition, SearchDocumentRecord};
+use dexzd_protocol::dexzd::v1::{LogPosition, RunRecord, SearchDocumentRecord};
 use dexzd_visibility_query::FieldRegistry;
 use prost::Message;
 use tokio_postgres::{Client, Config};
@@ -55,6 +55,21 @@ impl CommittedDocuments {
                 run_singleton_key(flow_hash, run_id, RunTable::SearchDocument),
             ),
             record.encode_to_vec(),
+        );
+        self.0.insert(
+            (
+                ColumnFamily::Flow,
+                run_singleton_key(flow_hash, run_id, RunTable::RunRecord),
+            ),
+            RunRecord {
+                tenant_id: tenant_id.0,
+                flow_id: record.flow_id.clone(),
+                run_id: run_id.as_bytes().to_vec(),
+                flow_type: record.flow_type.clone(),
+                status: record.status,
+                ..RunRecord::default()
+            }
+            .encode_to_vec(),
         );
     }
 }
@@ -459,6 +474,28 @@ pub(crate) async fn run_projector_scenarios_for_test(
             rebuilt_run,
             &rebuilt_record,
         );
+        let purging_run = RunId([7; 16]);
+        let purging_hash = FlowHash(11);
+        committed_view.insert(
+            partition_id,
+            tenant_id,
+            purging_hash,
+            purging_run,
+            &document(tenant_id, purging_run, 1),
+        );
+        committed_view.0.insert(
+            (
+                ColumnFamily::Flow,
+                run_singleton_key(purging_hash, purging_run, RunTable::RunRecord),
+            ),
+            RunRecord {
+                tenant_id: tenant_id.0,
+                run_id: purging_run.as_bytes().to_vec(),
+                is_purging: true,
+                ..RunRecord::default()
+            }
+            .encode_to_vec(),
+        );
         let poison_run = RunId([6; 16]);
         committed_view.insert(
             partition_id,
@@ -487,6 +524,7 @@ pub(crate) async fn run_projector_scenarios_for_test(
         assert!(listed.contains(&rebuilt_run.to_string()));
         assert!(listed.contains(&other_run.to_string()));
         assert!(!listed.contains(&poison_run.to_string()));
+        assert!(!listed.contains(&purging_run.to_string()));
         assert!(
             skipped_reason(&backend, tenant_id, poison_run)
                 .await

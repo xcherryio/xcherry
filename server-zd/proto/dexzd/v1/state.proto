@@ -126,6 +126,7 @@ message RunRecord {
   uint64 written_bytes_since_checkpoint = 25;
   uint32 commands_since_checkpoint = 26;
   // True after retention expired and the prefix purge started.
+  // Retention sets it only once no outbox item awaits acknowledgment; it never becomes false again.
   bool is_purging = 27;
   int64 retention_deadline_micros = 28;
   // A Step returned GracefulComplete; the attempt completes once no user Step is active.

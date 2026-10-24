@@ -26,9 +26,10 @@ use dexzd_protocol::dexzd::v1::{
     AttributeRecord, ChannelMessageRecord, HardDeleteObjectReference, PermissionSetRecord,
 };
 
+use crate::effects::HardDeleteObjectOwner;
 use crate::runtime::read_operations::state_rows::{
     WireValue, decode_row, read_directory, read_run, read_table_value, response_value,
-    scan_run_rows, wire_value,
+    scan_run_rows,
 };
 use crate::runtime::{FlowAddress, FlowRuntimeRegistry, RuntimeError};
 
@@ -39,7 +40,7 @@ impl FlowRuntimeRegistry {
     /// Returns the requested Attributes of a run, sorted by key; missing keys are omitted.
     ///
     /// Values above the inline threshold are returned as value references unless hydration is
-    /// configured; hard-delete values are always returned as content and omitted once deleted.
+    /// configured; hard-delete values are always returned as content.
     pub async fn get_attributes(
         &self,
         tenant_id: TenantId,
@@ -207,6 +208,12 @@ impl FlowRuntimeRegistry {
                     flow.flow_id
                 )));
             }
+            read_run(
+                committed.as_ref(),
+                context,
+                &flow,
+                &reference.run_id.to_string(),
+            )?;
             if let Some(value) = read_table_value(
                 committed.as_ref(),
                 context.flow_hash,
@@ -338,7 +345,7 @@ impl FlowRuntimeRegistry {
     }
 
     /// Reads a hard-delete value, retrying once with the current object after an overwrite (plan 10.3).
-    async fn read_hard_delete_attribute(
+    pub(crate) async fn read_hard_delete_attribute(
         &self,
         flow: &FlowAddress,
         run_id: RunId,
@@ -356,9 +363,10 @@ impl FlowRuntimeRegistry {
             return Ok(first);
         }
         let context = self.flow_context(flow);
-        let current: Option<AttributeRecord> = {
+        let current_value = {
             let committed = self.inner.dependencies.committer.committed_view()?;
-            decode_row(
+            read_run(committed.as_ref(), context, flow, &run_id.to_string())?;
+            let current: Option<AttributeRecord> = decode_row(
                 committed.as_ref(),
                 ColumnFamily::Flow,
                 &run_key(
@@ -368,25 +376,70 @@ impl FlowRuntimeRegistry {
                     key.as_bytes(),
                 ),
                 "Attribute",
-            )?
+            )?;
+            current
+                .and_then(|record| record.value)
+                .as_ref()
+                .map(|stored| {
+                    response_value(
+                        committed.as_ref(),
+                        context.flow_hash,
+                        run_id,
+                        stored,
+                        self.inner.config.hydrate_value_references,
+                    )
+                })
+                .transpose()?
+                .flatten()
         };
-        let current_object = current.and_then(|record| record.value).and_then(|stored| {
-            match wire_value(&stored, run_id)? {
-                WireValue::HardDeleteObject(current) => Some(current),
-                WireValue::Value(_) => None,
-            }
-        });
-        let Some(current_object) =
-            current_object.filter(|current| current.object_id != object.object_id)
-        else {
-            return Ok(None);
+        let current_object = match current_value {
+            Some(WireValue::Value(value)) => return Ok(Some(value)),
+            Some(WireValue::HardDeleteObject(current_object)) => current_object,
+            None => return Ok(None),
         };
-        reader
+        if current_object.object_id == object.object_id {
+            return Err(missing_hard_delete_object(
+                flow,
+                context.flow_hash,
+                run_id,
+                &object,
+            ));
+        }
+        let value = reader
             .read_hard_delete_value(flow, run_id, &current_object)
             .await
             .map_err(|error| RuntimeError::Unavailable {
                 detail: error.to_string(),
-            })
+            })?;
+        if value.is_none() {
+            let committed = self.inner.dependencies.committer.committed_view()?;
+            read_run(committed.as_ref(), context, flow, &run_id.to_string())?;
+            return Err(missing_hard_delete_object(
+                flow,
+                context.flow_hash,
+                run_id,
+                &current_object,
+            ));
+        }
+        Ok(value)
+    }
+}
+
+fn missing_hard_delete_object(
+    flow: &FlowAddress,
+    flow_hash: dexzd_keyspace::FlowHash,
+    run_id: RunId,
+    object: &HardDeleteObjectReference,
+) -> RuntimeError {
+    let object_key = HardDeleteObjectOwner {
+        tenant_id: flow.tenant_id,
+        flow_hash,
+        run_id,
+    }
+    .object_key(&object.object_id);
+    tracing::error!(%object_key, "a live hard-delete Attribute object is missing");
+    RuntimeError::Internal {
+        detail: format!("hard-delete Attribute object {object_key} is missing"),
     }
 }
 

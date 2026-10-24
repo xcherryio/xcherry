@@ -14,7 +14,7 @@ use dexzd_apply::{FlowStateReader, StateReadError, StateRow};
 use dexzd_keyspace::row_keys::{flow_list_index_key, run_singleton_key, tenant_run_index_key};
 use dexzd_keyspace::{ColumnFamily, FlowHash, IndexKind, PartitionId, RunId, RunTable, TenantId};
 use dexzd_protocol::dex::{self, FlowStatus, IndexType};
-use dexzd_protocol::dexzd::v1::{SearchAttributeValue, SearchDocumentRecord};
+use dexzd_protocol::dexzd::v1::{RunRecord, SearchAttributeValue, SearchDocumentRecord};
 use dexzd_visibility_query::{
     FieldRegistry, SearchDocument, compare_documents, evaluate, parse_and_check,
 };
@@ -75,6 +75,21 @@ impl MemoryState {
                 run_singleton_key(flow_hash, run_id, RunTable::SearchDocument),
             ),
             record.encode_to_vec(),
+        );
+        self.rows.insert(
+            (
+                ColumnFamily::Flow,
+                run_singleton_key(flow_hash, run_id, RunTable::RunRecord),
+            ),
+            RunRecord {
+                tenant_id,
+                flow_id: record.flow_id.clone(),
+                run_id: run_id.as_bytes().to_vec(),
+                flow_type: record.flow_type.clone(),
+                status: record.status,
+                ..RunRecord::default()
+            }
+            .encode_to_vec(),
         );
         self.rows.insert(
             (
@@ -281,6 +296,53 @@ async fn searches_all_partitions_and_pages_in_default_order() {
             .collect::<Vec<_>>(),
         vec!["flow-3", "flow-2", "flow-1"]
     );
+}
+
+#[tokio::test]
+async fn purging_run_is_absent_from_search_before_its_rows_are_deleted() {
+    let retained = record(7, 1, "Checkout", FlowStatus::Completed, 10, 20);
+    let purging = record(7, 2, "Checkout", FlowStatus::Completed, 30, 40);
+    let mut initial = MemoryState::default();
+    initial.insert(0, 7, 1, retained.clone());
+    initial.insert(0, 7, 2, purging.clone());
+    let provider = MemoryViewProvider::new(Arc::new(initial));
+    let backend = BuiltinSearchBackend::new(provider.clone(), 1).expect("backend");
+    let fields = fields();
+    assert_eq!(
+        backend
+            .search(request("", None, 10, &fields))
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        2
+    );
+
+    let mut during_purge = MemoryState::default();
+    during_purge.insert(0, 7, 1, retained);
+    during_purge.insert(0, 7, 2, purging.clone());
+    let purging_run_id = RunId::from_slice(&purging.run_id).expect("fixture run ID");
+    let purging_run_key = run_singleton_key(FlowHash(2), purging_run_id, RunTable::RunRecord);
+    let encoded_record = during_purge
+        .rows
+        .get(&(ColumnFamily::Flow, purging_run_key.clone()))
+        .expect("run record");
+    let mut run_record = RunRecord::decode(encoded_record.as_slice()).expect("run record");
+    run_record.is_purging = true;
+    during_purge.rows.insert(
+        (ColumnFamily::Flow, purging_run_key),
+        run_record.encode_to_vec(),
+    );
+    provider.replace(Arc::new(during_purge));
+    for query in ["", "FlowType = 'Checkout'"] {
+        let entries = backend
+            .search(request(query, None, 10, &fields))
+            .await
+            .expect("search during purge")
+            .entries;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].flow_id, "flow-1");
+    }
 }
 
 #[tokio::test]

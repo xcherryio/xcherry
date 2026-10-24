@@ -197,3 +197,73 @@ fn stream_store_error(error: StreamStoreError) -> FlowOperationError {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use dexzd_keyspace::TenantId;
+    use dexzd_protocol::dex::{
+        ListStreamMessagesRequest, ReadStreamRequest, Value, WriteStreamRequest, value,
+    };
+    use dexzd_stream_store::{StreamStore, StreamStoreConfig};
+
+    use super::StreamOperations;
+
+    #[tokio::test]
+    async fn stream_reads_outlive_the_flow_run_like_the_go_server() {
+        let stream_store = Arc::new(
+            StreamStore::new(&StreamStoreConfig {
+                enabled: true,
+                ..StreamStoreConfig::default()
+            })
+            .expect("Stream Store"),
+        );
+        let operations = StreamOperations::new(stream_store.clone(), Duration::from_secs(1));
+        operations
+            .write_stream(
+                TenantId::DEFAULT,
+                WriteStreamRequest {
+                    flow_id: "expired-flow".to_owned(),
+                    flow_type: "OrderFlow".to_owned(),
+                    stream_name: "Progress".to_owned(),
+                    stream_capacity_bytes: 1 << 20,
+                    value: Some(Value {
+                        kind: Some(value::Kind::StringValue("retained".to_owned())),
+                    }),
+                    source: "test".to_owned(),
+                },
+            )
+            .await
+            .expect("write independent of Flow existence");
+        let read = operations
+            .read_stream(
+                TenantId::DEFAULT,
+                ReadStreamRequest {
+                    flow_id: "expired-flow".to_owned(),
+                    flow_type: "OrderFlow".to_owned(),
+                    stream_name: "Progress".to_owned(),
+                    ..ReadStreamRequest::default()
+                },
+            )
+            .await
+            .expect("read independent of Flow existence");
+        assert!(read.message.is_some());
+        let listed = operations
+            .list_stream_messages(
+                TenantId::DEFAULT,
+                ListStreamMessagesRequest {
+                    flow_id: "expired-flow".to_owned(),
+                    flow_type: "OrderFlow".to_owned(),
+                    stream_name: "Progress".to_owned(),
+                    page_size: 1,
+                    ..ListStreamMessagesRequest::default()
+                },
+            )
+            .await
+            .expect("list independent of Flow existence");
+        assert_eq!(listed.messages.len(), 1);
+        stream_store.close().await.expect("close Stream Store");
+    }
+}
