@@ -9,12 +9,14 @@
 //! A small deterministic stand-in for apply that writes real state rows for a few commands.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateWrite,
     WaitableChange,
 };
+use dexzd_keyspace::row_keys::channel_message_key;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, TenantId, flow_directory_key, run_key};
 use dexzd_protocol::dex::{ErrorSubStatus, FlowStatus, StopType};
 use dexzd_protocol::dexzd::v1::{
@@ -38,6 +40,8 @@ pub(crate) struct ModelApplier {
     pub(crate) applied: Mutex<Vec<FlowCommand>>,
     /// Runs at the start of every apply call.
     pub(crate) apply_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Applies unscripted commands with the real apply instead of the model.
+    pub(crate) uses_real_apply: AtomicBool,
 }
 
 impl CommandApplier for ModelApplier {
@@ -54,6 +58,9 @@ impl CommandApplier for ModelApplier {
         self.applied.lock().unwrap().push(command.clone());
         if let Some(scripted) = self.scripted.lock().unwrap().pop_front() {
             return scripted;
+        }
+        if self.uses_real_apply.load(Ordering::SeqCst) {
+            return dexzd_apply::apply_flow_command(context, state, command);
         }
         Ok(apply_model(context, state, command))
     }
@@ -157,13 +164,10 @@ fn apply_model(
         flow_command::Command::ChannelPublish(publish) => {
             let request = publish.request.clone().unwrap_or_default();
             for (index, message) in request.messages.iter().enumerate() {
-                let mut suffix = message.channel_name.as_bytes().to_vec();
-                suffix.push(0);
                 let seq = u64::try_from(command.proposed_at_micros).unwrap() + index as u64;
-                suffix.extend_from_slice(&seq.to_be_bytes());
                 writes.push(put(
                     ColumnFamily::Flow,
-                    run_key(flow_hash, run_id, RunTable::ChannelMessage, &suffix),
+                    channel_message_key(flow_hash, run_id, &message.channel_name, seq),
                     &ChannelMessageRecord {
                         channel_name: message.channel_name.clone(),
                         message_id: message.message_id.clone(),

@@ -6,10 +6,13 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::sync::atomic::Ordering;
+
 use dexzd_apply::ApplyOutcome;
 use dexzd_protocol::dex::{
-    AttributeWrite, ChannelMessage, ErrorSubStatus, InvokeRpcRequest, InvokeWorkerRpcResponse,
-    PublishToChannelRequest, ResetFlowRequest, StopFlowRequest, WorkerErrorResponse, WorkerTarget,
+    AttributeWrite, ChannelMessage, ChannelMessageDeletion, ErrorSubStatus, GetAttributesRequest,
+    InvokeRpcRequest, InvokeWorkerRpcResponse, PublishToChannelRequest, ResetFlowRequest,
+    StopFlowRequest, WorkerErrorResponse, WorkerTarget,
 };
 use dexzd_protocol::dexzd::v1::flow_command;
 
@@ -333,6 +336,140 @@ async fn rpc_with_effects_commits_and_returns_the_committed_output() {
     };
     assert_eq!(rpc.app_worker_id, "worker-1");
     assert_eq!(rpc.request_fingerprint.len(), 16);
+}
+
+#[tokio::test(start_paused = true)]
+async fn transactional_rpc_with_a_missing_deletion_commits_none_of_its_writes() {
+    let harness = RuntimeHarness::new();
+    harness
+        .applier
+        .uses_real_apply
+        .store(true, Ordering::SeqCst);
+    start_flow(&harness, "order-1").await.unwrap();
+    let response = InvokeWorkerRpcResponse {
+        upsert_attributes: vec![AttributeWrite {
+            key: "approved".to_owned(),
+            value: Some(string_value("yes")),
+            ..AttributeWrite::default()
+        }],
+        delete_from_channel: vec![ChannelMessageDeletion {
+            channel_name: "orders".to_owned(),
+            message_id: "missing".to_owned(),
+        }],
+        ..InvokeWorkerRpcResponse::default()
+    };
+    let worker_result = WorkerRpcResult {
+        response,
+        app_worker_id: "worker-1".to_owned(),
+        pull_routing: None,
+    };
+    harness
+        .rpc_invoker
+        .results
+        .lock()
+        .unwrap()
+        .extend([Ok(worker_result.clone()), Ok(worker_result)]);
+    let mut transactional_request = rpc_request("order-1");
+    transactional_request.is_transactional = true;
+
+    let error = harness
+        .drive(harness.registry.invoke_rpc(TENANT, transactional_request))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
+    assert_eq!(error.sub_status(), ErrorSubStatus::ChannelMessageNotFound);
+    let Some(flow_command::Command::RpcCommitted(rpc)) =
+        harness.submitted().last().cloned().unwrap().command
+    else {
+        panic!("expected RpcCommitted");
+    };
+    assert!(rpc.is_transactional);
+    assert!(attribute_keys(&harness, "order-1").await.is_empty());
+
+    let mut non_transactional_request = rpc_request("order-1");
+    non_transactional_request.request_id = "rpc-2".to_owned();
+    harness
+        .drive(
+            harness
+                .registry
+                .invoke_rpc(TENANT, non_transactional_request),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        attribute_keys(&harness, "order-1").await,
+        vec!["approved".to_owned()],
+        "a non-transactional RPC ignores the missing deletion"
+    );
+}
+
+async fn attribute_keys(harness: &RuntimeHarness, flow_id: &str) -> Vec<String> {
+    harness
+        .registry
+        .get_attributes(
+            TENANT,
+            GetAttributesRequest {
+                flow_id: flow_id.to_owned(),
+                all_keys: true,
+                ..GetAttributesRequest::default()
+            },
+        )
+        .await
+        .unwrap()
+        .attributes
+        .into_iter()
+        .map(|attribute| attribute.key)
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn rpc_channel_publications_get_new_message_ids_before_proposing() {
+    let harness = RuntimeHarness::new();
+    start_flow(&harness, "order-1").await.unwrap();
+    let publication = |message_id: &str| ChannelMessage {
+        channel_name: "orders".to_owned(),
+        value: Some(string_value("shipped")),
+        message_id: message_id.to_owned(),
+    };
+    harness
+        .rpc_invoker
+        .results
+        .lock()
+        .unwrap()
+        .push_back(Ok(WorkerRpcResult {
+            response: InvokeWorkerRpcResponse {
+                publish_to_channel: vec![publication(""), publication("worker-chosen")],
+                ..InvokeWorkerRpcResponse::default()
+            },
+            app_worker_id: "worker-1".to_owned(),
+            pull_routing: None,
+        }));
+
+    harness
+        .drive(harness.registry.invoke_rpc(TENANT, rpc_request("order-1")))
+        .await
+        .unwrap();
+
+    let last = harness.submitted().last().cloned().unwrap();
+    let Some(flow_command::Command::RpcCommitted(rpc)) = last.command else {
+        panic!("expected RpcCommitted");
+    };
+    let message_ids: Vec<uuid::Uuid> = rpc
+        .response
+        .unwrap()
+        .publish_to_channel
+        .iter()
+        .map(|message| message.message_id.parse().unwrap())
+        .collect();
+    assert_eq!(message_ids.len(), 2);
+    assert!(
+        message_ids
+            .iter()
+            .all(|message_id| message_id.get_version_num() == 7),
+        "{message_ids:?}"
+    );
+    assert_ne!(message_ids[0], message_ids[1]);
 }
 
 #[tokio::test(start_paused = true)]

@@ -14,6 +14,7 @@ pub(crate) mod state_rows;
 
 use std::collections::BTreeMap;
 
+use dexzd_keyspace::row_keys::channel_name_prefix;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, TenantId, ValueReference, run_key};
 use dexzd_protocol::dex::{
     ChannelMessage, EncodedObject, FlowExecutionId, GetAttributesRequest, GetAttributesResponse,
@@ -91,8 +92,7 @@ impl FlowRuntimeRegistry {
         let context = self.flow_context(&flow);
         let committed = self.inner.dependencies.committer.committed_view()?;
         let run = read_run(committed.as_ref(), context, &flow, &request.run_id)?;
-        let mut suffix_prefix = request.channel_name.as_bytes().to_vec();
-        suffix_prefix.push(0);
+        let suffix_prefix = channel_name_prefix(&request.channel_name);
         let rows: Vec<(Vec<u8>, ChannelMessageRecord)> = scan_run_rows(
             committed.as_ref(),
             context.flow_hash,
@@ -220,7 +220,12 @@ impl FlowRuntimeRegistry {
         self.check_running()?;
         let flow = FlowAddress::new(tenant_id, request.flow_id.clone());
         let committed = self.inner.dependencies.committer.committed_view()?;
-        read_model_adapter::read_flow_state(committed.as_ref(), self.flow_context(&flow), &request)
+        read_model_adapter::read_flow_state(
+            committed.as_ref(),
+            self.flow_context(&flow),
+            &flow,
+            &request,
+        )
     }
 
     /// Returns a page of history events of a run through apply's read model.
@@ -235,6 +240,7 @@ impl FlowRuntimeRegistry {
         read_model_adapter::read_history_events(
             committed.as_ref(),
             self.flow_context(&flow),
+            &flow,
             &request,
         )
     }
