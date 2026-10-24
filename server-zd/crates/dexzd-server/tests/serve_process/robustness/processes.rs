@@ -10,6 +10,7 @@
 //! robustness tests.
 
 use std::fs;
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -37,6 +38,9 @@ pub(crate) const PROCESS_SHUTDOWN_BUDGET: Duration = Duration::from_secs(20);
 /// Bounds one readiness probe; a process binds its port before it holds the lease.
 const READINESS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Bounds the wait for the kernel to report a process stopped after SIGSTOP.
+const STOP_BUDGET: Duration = Duration::from_secs(5);
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// A new epoch found a batch that a killed process wrote past the recovery gap.
 const STALE_BATCH_STOP_REASON: &str =
     "an unacknowledged batch of an earlier epoch holds the next seq; recovery voids it";
@@ -200,6 +204,27 @@ impl RobustnessProcess {
             signal_status.success(),
             "kill -{signal_name} {process_id} failed"
         );
+    }
+
+    /// Sends SIGSTOP and waits until the kernel reports the process stopped, so it runs no code.
+    pub(crate) async fn freeze_and_wait_until_stopped(&mut self) {
+        self.send_signal("STOP").await;
+        let process_id = self.child.id().expect("the process is still running");
+        let deadline = tokio::time::Instant::now() + STOP_BUDGET;
+        while !is_stopped(process_id).await {
+            if let Some(status) = self.exit_status() {
+                panic!(
+                    "dex-server-zd exited with {status} instead of stopping:\n{}",
+                    self.log()
+                );
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "dex-server-zd did not stop within {STOP_BUDGET:?} of SIGSTOP:\n{}",
+                self.log()
+            );
+            tokio::time::sleep(STOP_POLL_INTERVAL).await;
+        }
     }
 
     /// Sends SIGKILL and waits until the process is reaped, so its files and port are free.
@@ -512,6 +537,63 @@ impl SupervisedNode {
             .as_ref()
             .expect("a supervised node has an incarnation between calls")
     }
+}
+
+/// Returns whether the kernel reports `process_id` stopped by a signal.
+async fn is_stopped(process_id: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        are_all_linux_threads_stopped(process_id)
+    } else if cfg!(target_os = "macos") {
+        is_macos_process_stopped(process_id).await
+    } else {
+        panic!("cannot observe a stopped process on this platform");
+    }
+}
+
+/// The thread group leader can stop while another thread still runs, so every thread must report `T`.
+fn are_all_linux_threads_stopped(process_id: u32) -> bool {
+    let task_directory = PathBuf::from(format!("/proc/{process_id}/task"));
+    let threads = fs::read_dir(&task_directory)
+        .unwrap_or_else(|error| panic!("cannot list {}: {error}", task_directory.display()));
+    for thread in threads {
+        let stat_path = thread
+            .unwrap_or_else(|error| panic!("cannot list {}: {error}", task_directory.display()))
+            .path()
+            .join("stat");
+        let stat = match fs::read_to_string(&stat_path) {
+            Ok(stat) => stat,
+            // A thread that exited runs no code.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("cannot read {}: {error}", stat_path.display()),
+        };
+        // The thread name may contain `)`, so the state follows the last one.
+        let state = stat
+            .rsplit_once(')')
+            .and_then(|(_, fields)| fields.trim_start().chars().next())
+            .unwrap_or_else(|| panic!("{} has no state field: {stat}", stat_path.display()));
+        if state != 'T' {
+            return false;
+        }
+    }
+    true
+}
+
+/// `ps -M` shows suspended threads as sleeping, so only the process state shows the stop.
+async fn is_macos_process_stopped(process_id: u32) -> bool {
+    let output = Command::new("ps")
+        .args(["-o", "state=", "-p"])
+        .arg(process_id.to_string())
+        .output()
+        .await
+        .expect("ps runs");
+    assert!(
+        output.status.success(),
+        "ps -o state= -p {process_id} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .trim_start()
+        .starts_with('T')
 }
 
 /// Requires the recovery of `process` to have voided at least one earlier epoch's batch.
