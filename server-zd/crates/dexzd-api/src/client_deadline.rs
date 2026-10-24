@@ -16,7 +16,8 @@ use tonic::{Code, Request};
 use crate::FlowOperationError;
 
 /// How early wait RPCs answer before the client deadline; exceeds the transport fallback margin.
-pub const CLIENT_DEADLINE_ANSWER_MARGIN: Duration = Duration::from_millis(40);
+// Covers request transit and scheduling stalls on loaded hosts, which exceeded 40 ms in CI.
+pub const CLIENT_DEADLINE_ANSWER_MARGIN: Duration = Duration::from_millis(200);
 
 /// SDKs send the remaining request budget rounded up to whole seconds.
 const REQUEST_TIMEOUT_ROUNDING: Duration = Duration::from_secs(1);

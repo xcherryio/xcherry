@@ -18,7 +18,7 @@ use tokio::time::Instant;
 use tonic::codegen::{Service, http};
 
 /// How long before the client's deadline the server answers, so it wins tonic's own timer.
-const DEADLINE_MARGIN: Duration = Duration::from_millis(20);
+const DEADLINE_MARGIN: Duration = Duration::from_millis(100);
 // Wait RPCs answer with their own timeout status before this fallback fires.
 const _: () = assert!(DEADLINE_MARGIN.as_nanos() < CLIENT_DEADLINE_ANSWER_MARGIN.as_nanos());
 
