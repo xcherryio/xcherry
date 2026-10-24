@@ -33,8 +33,12 @@ final class IntegrationTestWaits {
 
     static void skipIfServerZD(final String feature) {
         Assumptions.assumeFalse(
-                SERVER_ENGINE == ServerEngine.SERVER_ENGINE_ZD,
+                isServerZD(),
                 "server-zd does not support " + feature);
+    }
+
+    static boolean isServerZD() {
+        return SERVER_ENGINE == ServerEngine.SERVER_ENGINE_ZD;
     }
 
     private static ServerEngine fetchServerEngine() {

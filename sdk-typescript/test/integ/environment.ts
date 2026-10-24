@@ -34,12 +34,16 @@ import { FlowServiceClient, ServerEngine } from "../../src/gen/dex.js";
 let serverEnginePromise: Promise<ServerEngine> | undefined;
 
 export async function skipIfServerZD(context: TestContext, feature: string): Promise<boolean> {
-  serverEnginePromise ??= fetchServerEngine();
-  if (await serverEnginePromise !== ServerEngine.SERVER_ENGINE_ZD) {
+  if (!await isServerZD()) {
     return false;
   }
   context.skip(`server-zd does not support ${feature}`);
   return true;
+}
+
+export async function isServerZD(): Promise<boolean> {
+  serverEnginePromise ??= fetchServerEngine();
+  return await serverEnginePromise === ServerEngine.SERVER_ENGINE_ZD;
 }
 
 async function fetchServerEngine(): Promise<ServerEngine> {
