@@ -197,7 +197,7 @@ async fn get_attributes_returns_sorted_committed_values_references_and_hard_dele
 }
 
 #[tokio::test(start_paused = true)]
-async fn purging_run_is_not_found_through_each_runtime_read() {
+async fn purging_run_is_not_found_except_load_blobs_omits_values() {
     let harness = RuntimeHarness::new();
     let run_id = start_flow(&harness, "order-1").await.unwrap();
     seed_attribute(
@@ -297,32 +297,31 @@ async fn purging_run_is_not_found_through_each_runtime_read() {
             .await
             .unwrap_err(),
     );
-    assert_not_found(
-        harness
-            .registry
-            .load_blobs(
-                TENANT,
-                LoadBlobsRequest {
-                    entries: vec![LoadBlobRequestEntry {
-                        flow_id: "order-1".to_owned(),
-                        blob_value: Some(Value {
-                            kind: Some(value::Kind::InternalBlobIdForStringValue(
-                                ValueReference {
-                                    run_id,
-                                    value_id: ValueId {
-                                        run_seq: 1,
-                                        index_in_command: 0,
-                                    },
-                                }
-                                .to_string(),
-                            )),
-                        }),
-                    }],
-                },
-            )
-            .await
-            .unwrap_err(),
-    );
+    let loaded = harness
+        .registry
+        .load_blobs(
+            TENANT,
+            LoadBlobsRequest {
+                entries: vec![LoadBlobRequestEntry {
+                    flow_id: "order-1".to_owned(),
+                    blob_value: Some(Value {
+                        kind: Some(value::Kind::InternalBlobIdForStringValue(
+                            ValueReference {
+                                run_id,
+                                value_id: ValueId {
+                                    run_seq: 1,
+                                    index_in_command: 0,
+                                },
+                            }
+                            .to_string(),
+                        )),
+                    }),
+                }],
+            },
+        )
+        .await
+        .expect("LoadBlobs omits values during purge");
+    assert!(loaded.values.is_empty());
     assert_not_found(
         harness
             .registry

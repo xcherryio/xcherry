@@ -95,7 +95,7 @@ pub(crate) async fn record_workload() -> Recording {
 /// Writes a cluster object with seeded identifiers, so bootstrap keeps it.
 ///
 /// Returns the partition hasher it defines.
-async fn seed_cluster_object(
+pub(crate) async fn seed_cluster_object(
     object_store: &InMemoryObjectStore,
     clock: &ScriptedClock,
     ids: &SeededIdSource,

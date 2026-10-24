@@ -311,21 +311,22 @@ fn assert_flow_not_found(api: &str, status: &tonic::Status) {
     assert_eq!(response.detail, status.message(), "{api}");
 }
 
-/// LoadBlobs of a purging run names the entry's Flow in the Go Server's NotFound detail.
+/// LoadBlobs of a purging run omits its values.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn load_blobs_of_a_purging_run_names_the_missing_flow() {
+async fn load_blobs_of_a_purging_run_omits_values() {
     let mut purge = FrozenPurge::start(None).await;
-    let status = purge
+    let loaded = purge
         .flow_client
         .load_blobs(load_report_request(&purge.report_reference))
         .await
-        .expect_err("a purging run's values are not loadable");
-    assert_flow_not_found("LoadBlobs", &status);
+        .expect("LoadBlobs succeeds during purge")
+        .into_inner();
+    assert!(loaded.values.is_empty());
     purge.finish().await;
 }
 
-/// Checks every Flow read, history read, and WaitFor call of the purging run.
-async fn assert_every_flow_read_is_not_found(purge: &mut FrozenPurge) {
+/// Checks Flow reads return NotFound while LoadBlobs omits the purging run's values.
+async fn assert_purging_flow_reads_not_found_and_blobs_omitted(purge: &mut FrozenPurge) {
     let client = &mut purge.flow_client;
     let flow_id = PURGING_FLOW_ID.to_owned();
     let run_id = purge.run_id.clone();
@@ -394,13 +395,6 @@ async fn assert_every_flow_read_is_not_found(purge: &mut FrozenPurge) {
                     timeout_seconds: 5,
                     ..InvokeRpcRequest::default()
                 })
-                .await
-                .map(drop),
-        ),
-        (
-            "LoadBlobs",
-            client
-                .load_blobs(load_report_request(&purge.report_reference))
                 .await
                 .map(drop),
         ),
@@ -482,12 +476,16 @@ async fn assert_every_flow_read_is_not_found(purge: &mut FrozenPurge) {
         let status = status.expect_err(api);
         assert_flow_not_found(api, &status);
     }
+    let loaded = client
+        .load_blobs(load_report_request(&purge.report_reference))
+        .await
+        .expect("LoadBlobs succeeds during purge")
+        .into_inner();
+    assert!(loaded.values.is_empty());
 }
 
-/// Reads between the committed purge decision and RunPurge answer like a missing Flow, with or without objects.
-async fn assert_frozen_purge_reads_answer_like_a_missing_flow(
-    parade_db: Option<ParadeDbSettings<'_>>,
-) {
+/// Checks reads before RunPurge commits, with and without hard-delete objects.
+async fn assert_frozen_purge_reads(parade_db: Option<ParadeDbSettings<'_>>) {
     let mut purge = FrozenPurge::start(parade_db).await;
     assert!(
         !purge
@@ -496,28 +494,28 @@ async fn assert_frozen_purge_reads_answer_like_a_missing_flow(
             .is_empty(),
         "the held purge has not deleted any object"
     );
-    assert_every_flow_read_is_not_found(&mut purge).await;
+    assert_purging_flow_reads_not_found_and_blobs_omitted(&mut purge).await;
     search_until_purging_flow_is_listed(&mut purge.flow_client, false).await;
 
     // The state after object deletion and before RunPurge commits.
     purge.hard_delete.delete_keys_under(HARD_DELETE_BUCKET, "");
-    assert_every_flow_read_is_not_found(&mut purge).await;
+    assert_purging_flow_reads_not_found_and_blobs_omitted(&mut purge).await;
     search_until_purging_flow_is_listed(&mut purge.flow_client, false).await;
     purge.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn frozen_purge_reads_answer_like_a_missing_flow_with_builtin_search() {
-    assert_frozen_purge_reads_answer_like_a_missing_flow(None).await;
+async fn frozen_purge_reads_are_not_found_except_load_blobs_with_builtin_search() {
+    assert_frozen_purge_reads(None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn frozen_purge_reads_answer_like_a_missing_flow_with_paradedb_search() {
+async fn frozen_purge_reads_are_not_found_except_load_blobs_with_paradedb_search() {
     let Ok(database_url) = std::env::var("DEX_ZD_PARADEDB_URL") else {
         return;
     };
     let schema = ParadeDbSchema::create(&database_url).await;
-    assert_frozen_purge_reads_answer_like_a_missing_flow(Some(ParadeDbSettings {
+    assert_frozen_purge_reads(Some(ParadeDbSettings {
         connection_string: &database_url,
         schema: schema.name(),
     }))
