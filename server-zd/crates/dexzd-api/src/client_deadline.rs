@@ -15,17 +15,13 @@ use tonic::{Code, Request};
 
 use crate::FlowOperationError;
 
-/// How long before the client's deadline a wait RPC answers, so the client receives its status.
-///
-/// The transport layer's own deadline answer must use a smaller margin.
+/// How early wait RPCs answer before the client deadline; exceeds the transport fallback margin.
 pub const CLIENT_DEADLINE_ANSWER_MARGIN: Duration = Duration::from_millis(40);
 
 /// SDKs send the remaining request budget rounded up to whole seconds.
 const REQUEST_TIMEOUT_ROUNDING: Duration = Duration::from_secs(1);
 
-/// The instant at which the client gives up on one call, from its `grpc-timeout` header.
-///
-/// The server's transport layer stores it in the request extensions.
+/// When the client abandons a call, from `grpc-timeout`; stored in the request extensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClientDeadline(pub Instant);
 

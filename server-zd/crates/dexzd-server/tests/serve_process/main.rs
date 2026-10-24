@@ -47,8 +47,6 @@ fn string_value(text: &str) -> Value {
 }
 
 /// SIGTERM stops serving, releases the lease, and exits 0; the next process takes over at once.
-///
-/// The primary store verifies environment credentials with a session token; hard-delete values use anonymous access.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sigterm_releases_the_lease_and_a_second_process_takes_over() {
     let primary = S3Emulator::start(PRIMARY_BUCKET, SignatureVerification::Strict).await;
