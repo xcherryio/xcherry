@@ -1044,12 +1044,12 @@ pub(super) fn ok_override(
     })
 }
 
-/// Applies `action` to `operation` calls on keys under `key_prefix` while enabled.
+/// Applies each `actions` entry's action to its operation's calls on keys under `key_prefix`
+/// while enabled.
 pub(super) struct SwitchableFault {
     pub(super) is_enabled: AtomicBool,
-    pub(super) operations: Vec<ObjectStoreOperation>,
+    pub(super) actions: Vec<(ObjectStoreOperation, FaultAction)>,
     pub(super) key_prefix: &'static str,
-    pub(super) action: FaultAction,
 }
 
 impl SwitchableFault {
@@ -1058,11 +1058,25 @@ impl SwitchableFault {
         operations: Vec<ObjectStoreOperation>,
         action: FaultAction,
     ) -> (DurableState, Arc<Self>) {
+        Self::install_actions(
+            "hard-delete/",
+            operations
+                .into_iter()
+                .map(|operation| (operation, action))
+                .collect(),
+        )
+    }
+
+    /// Like [`Self::install`], with an action per operation. Batch deletes pass an empty key,
+    /// so only an empty `key_prefix` faults them.
+    pub(super) fn install_actions(
+        key_prefix: &'static str,
+        actions: Vec<(ObjectStoreOperation, FaultAction)>,
+    ) -> (DurableState, Arc<Self>) {
         let fault = Arc::new(Self {
             is_enabled: AtomicBool::new(false),
-            operations,
-            key_prefix: "hard-delete/",
-            action,
+            actions,
+            key_prefix,
         });
         let mut durable = DurableState::new();
         durable.objects = Arc::new(InMemoryObjectStore::with_injector(
@@ -1078,12 +1092,12 @@ impl SwitchableFault {
 
 impl FaultInjector for SwitchableFault {
     fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
-        if self.is_enabled.load(Ordering::SeqCst)
-            && self.operations.contains(&operation)
-            && key.starts_with(self.key_prefix)
-        {
-            return self.action;
+        if !self.is_enabled.load(Ordering::SeqCst) || !key.starts_with(self.key_prefix) {
+            return FaultAction::Proceed;
         }
-        FaultAction::Proceed
+        self.actions
+            .iter()
+            .find(|(faulted, _)| *faulted == operation)
+            .map_or(FaultAction::Proceed, |(_, action)| *action)
     }
 }

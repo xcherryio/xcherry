@@ -34,7 +34,7 @@ use crate::effects::dispatch::MethodDispatchRequest;
 use crate::effects::dispatch::worker_result::{
     MethodResult, WorkerResultCheck, check_worker_result,
 };
-use crate::effects::hard_delete_objects::HardDeleteObjectOwner;
+use crate::effects::hard_delete_objects::{HardDeleteObjectOwner, HardDeleteUploads};
 use crate::effects::method_request::{
     MethodAttemptKey, MethodAttemptState, MethodRequest, build_method_request,
     heartbeat_checkpoint_value, read_method_attempt_state, resolve_method_durability,
@@ -565,11 +565,8 @@ impl MethodAttempt {
             let failure = method_deadline.timeout_failure();
             self.propose_failure(failure, &sticky_app_worker_id, urgency)
                 .await;
-            return self
-                .context
-                .hard_delete_objects
-                .finish_uploads(uploads, false)
-                .await;
+            self.finish_result_uploads(uploads, false).await;
+            return Ok(());
         }
         let command = self.flow_command(flow_command::Command::StepMethodCompleted(
             result.into_command(
@@ -588,10 +585,26 @@ impl MethodAttempt {
         let Some(reply) = reply else {
             return Ok(());
         };
-        self.context
+        self.finish_result_uploads(uploads, !reply.is_error()).await;
+        Ok(())
+    }
+
+    /// Finishes the uploads of the attempt's only proposal. A failure is logged because the ledger
+    /// keeps its records for recovery.
+    async fn finish_result_uploads(&self, uploads: HardDeleteUploads, is_committed: bool) {
+        if let Err(error) = self
+            .context
             .hard_delete_objects
-            .finish_uploads(uploads, !reply.is_error())
+            .finish_uploads(uploads, is_committed)
             .await
+        {
+            tracing::warn!(
+                %error,
+                run_id = %self.key.run_id,
+                attempt = self.key.attempt,
+                "finishing hard-delete uploads failed; recovery deletes unreferenced objects"
+            );
+        }
     }
 
     async fn propose_failure(
