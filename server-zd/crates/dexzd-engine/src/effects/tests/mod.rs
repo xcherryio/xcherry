@@ -14,6 +14,7 @@ mod hard_delete_tests;
 mod outbox_and_purge_tests;
 mod rebuild_tests;
 mod timer_tests;
+mod worker_output_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -21,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dexzd_apply::{
-    ApplyContext, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
+    ApplyContext, ApplyEffect, ApplyOutcome, FlowStateReader, StateReadError, StateRow, StateWrite,
     apply_flow_command,
 };
 use dexzd_clock::WallClock;
@@ -31,8 +32,8 @@ use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, Object
 use dexzd_protocol::dex::{
     FlowTimeoutPolicy, InvokeExecuteMethodOutput, InvokeExecuteMethodResponse,
     InvokeWaitForMethodOutput, InvokeWaitForMethodResponse, PollWorkerTaskFrame, StartFlowRequest,
-    StepMethodHeartbeat, Value, WorkerErrorResponse, WorkerTarget, invoke_execute_method_output,
-    invoke_wait_for_method_output, poll_worker_task_frame, value,
+    StepMethodHeartbeat, StepStreamWrite, Value, WorkerErrorResponse, WorkerTarget,
+    invoke_execute_method_output, invoke_wait_for_method_output, poll_worker_task_frame, value,
 };
 use dexzd_protocol::dexzd::v1::{
     CommandErrorReply, CommandReply, EmptyReply, FlowCommand, FlowStartCommand, RunRecord,
@@ -41,6 +42,7 @@ use dexzd_protocol::dexzd::v1::{
 };
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::InMemoryLocalStore;
+use dexzd_stream_store::{StreamStore, StreamStoreConfig};
 use dexzd_worker_dispatch::{DispatchEvent, DispatchOutcome};
 use futures::future::BoxFuture;
 use prost::Message;
@@ -174,8 +176,12 @@ pub(super) struct ApplyRuntime {
     sink: EffectRunner,
     last_proposed_micros: Mutex<i64>,
     pub(super) commands: Mutex<Vec<RecordedCommand>>,
+    /// Effects of every committed command, in commit order.
+    pub(super) published_effects: Mutex<Vec<ApplyEffect>>,
     pub(super) busy_lock_keys: Mutex<BTreeSet<String>>,
     pub(super) unavailable_proposals: AtomicUsize,
+    /// Makes `flow_state_reader` fail as unavailable; committed reads still succeed.
+    pub(super) is_flow_state_unreadable: AtomicBool,
     overrides: Mutex<Vec<CommandOverride>>,
 }
 
@@ -234,6 +240,10 @@ impl ApplyRuntime {
                 urgency,
                 reply: reply.clone(),
             });
+            self.published_effects
+                .lock()
+                .expect("lock")
+                .extend(effects.iter().cloned());
         }
         self.sink.handle(flow, &effects, true);
         Ok(reply)
@@ -336,6 +346,11 @@ impl EffectRuntime for ApplyRuntime {
         _flow: &FlowAddress,
         _include_speculative: bool,
     ) -> Result<Box<dyn FlowStateReader + Send>, EffectRuntimeError> {
+        if self.is_flow_state_unreadable.load(Ordering::SeqCst) {
+            return Err(EffectRuntimeError::Unavailable {
+                detail: "injected state reader outage".to_owned(),
+            });
+        }
         Ok(Box::new(self.snapshot()))
     }
 
@@ -455,6 +470,26 @@ impl FakeDispatch {
             )),
         });
     }
+
+    /// Sends a Step Stream write frame of the dispatched method.
+    pub(super) fn send_stream_write(&self, write: StepStreamWrite) {
+        let output = match self.method_request() {
+            MethodRequest::WaitFor(_) => {
+                poll_worker_task_frame::Output::WaitFor(InvokeWaitForMethodOutput {
+                    output: Some(invoke_wait_for_method_output::Output::StreamWrite(write)),
+                })
+            }
+            MethodRequest::Execute(_) => {
+                poll_worker_task_frame::Output::Execute(InvokeExecuteMethodOutput {
+                    output: Some(invoke_execute_method_output::Output::StreamWrite(write)),
+                })
+            }
+        };
+        self.send_frame(PollWorkerTaskFrame {
+            task_id: "task".to_owned(),
+            output: Some(output),
+        });
+    }
 }
 
 /// Method dispatcher that hands every dispatch to the test.
@@ -564,6 +599,7 @@ pub(super) struct EffectHarness {
     pub(super) hard_delete_objects: HardDeleteObjects,
     pub(super) hasher: PartitionHasher,
     pub(super) clock: Arc<TokioWallClock>,
+    pub(super) stream_store: Arc<StreamStore>,
     tasks: EffectTasksHandle,
 }
 
@@ -594,6 +630,13 @@ impl EffectHarness {
             hasher.clone(),
         );
         let dispatcher = Arc::new(FakeDispatcher::new());
+        let stream_store = Arc::new(
+            StreamStore::new(&StreamStoreConfig {
+                enabled: true,
+                ..StreamStoreConfig::default()
+            })
+            .expect("the Stream Store configuration is valid"),
+        );
         let (runner, tasks) = EffectRunner::new(
             &config,
             EffectDependencies {
@@ -605,6 +648,7 @@ impl EffectHarness {
                     has_blob_store: true,
                     ..ValidationConfig::default()
                 },
+                stream_store: Arc::clone(&stream_store),
             },
         );
         let runtime = Arc::new(ApplyRuntime {
@@ -614,8 +658,10 @@ impl EffectHarness {
             sink: runner.clone(),
             last_proposed_micros: Mutex::new(0),
             commands: Mutex::new(Vec::new()),
+            published_effects: Mutex::new(Vec::new()),
             busy_lock_keys: Mutex::new(BTreeSet::new()),
             unavailable_proposals: AtomicUsize::new(0),
+            is_flow_state_unreadable: AtomicBool::new(false),
             overrides: Mutex::new(Vec::new()),
         });
         let tasks = tasks.start(Arc::clone(&runtime) as _);
@@ -627,6 +673,7 @@ impl EffectHarness {
             hard_delete_objects,
             hasher,
             clock,
+            stream_store,
             tasks,
         }
     }
@@ -726,6 +773,10 @@ impl EffectHarness {
 
     pub(super) async fn shutdown(self) {
         self.tasks.shutdown().await;
+        self.stream_store
+            .close()
+            .await
+            .expect("the Stream Store closes");
     }
 }
 

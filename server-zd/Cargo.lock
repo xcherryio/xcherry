@@ -1031,6 +1031,7 @@ dependencies = [
  "dexzd-protocol",
  "dexzd-request-validation",
  "dexzd-storage",
+ "dexzd-stream-store",
  "dexzd-worker-dispatch",
  "futures",
  "prost",

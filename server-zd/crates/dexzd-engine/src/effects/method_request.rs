@@ -422,3 +422,18 @@ pub(crate) fn resolve_method_durability(
         })
         .unwrap_or(dex::StepDurability::Sync)
 }
+
+/// Returns the configured timeout in seconds of `method`, or 0 when the Step options leave it
+/// to the default; apply reports the same value when the attempt starts.
+pub(crate) fn configured_method_timeout_seconds(
+    options: Option<&dex::StepOptions>,
+    method: i32,
+) -> i32 {
+    options.map_or(0, |options| {
+        if method == StepMethod::WaitFor as i32 {
+            options.wait_for_timeout_seconds
+        } else {
+            options.execute_timeout_seconds
+        }
+    })
+}

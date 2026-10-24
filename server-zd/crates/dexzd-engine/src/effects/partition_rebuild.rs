@@ -15,6 +15,7 @@ use dexzd_apply::{ApplyEffect, FlowStateReader};
 use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionId, TenantId, partition_index_prefix};
 use dexzd_protocol::dexzd::v1::{StepInvocationKey, StepInvocationPhase};
 
+use crate::effects::method_request::configured_method_timeout_seconds;
 use crate::effects::state_reads::{
     RunLocation, parse_retention_index_key, parse_run_item_index_key, read_run_record,
     read_step_executions, scan_all,
@@ -91,6 +92,10 @@ fn rebuild_invocations(
                     invocation: key,
                     attempt: invocation.attempt,
                     task_id: invocation.task_id,
+                    method_timeout_seconds: configured_method_timeout_seconds(
+                        step_execution.options.as_ref(),
+                        invocation.method,
+                    ),
                 });
             }
         }

@@ -37,6 +37,7 @@ use dexzd_object_store::ObjectStoreError;
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, PendingHardDeleteUpload, RunSettings};
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::StorageError;
+use dexzd_stream_store::StreamStore;
 use futures::future::BoxFuture;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -228,6 +229,8 @@ pub struct EffectDependencies {
     pub clock: Arc<dyn WallClock>,
     /// Limits for validating Worker responses.
     pub validation_config: ValidationConfig,
+    /// Receives Step Stream writes from Worker frames, in frame order, on a best-effort basis.
+    pub stream_store: Arc<StreamStore>,
 }
 
 /// Shared state of every effect task.
@@ -239,6 +242,7 @@ pub(crate) struct EffectContext {
     pub(crate) hasher: PartitionHasher,
     pub(crate) clock: Arc<dyn WallClock>,
     pub(crate) validation_config: ValidationConfig,
+    pub(crate) stream_store: Arc<StreamStore>,
     /// Hard-delete uploads recorded before this node started; recovery checks only these, so
     /// uploads of commands proposed after startup are never mistaken for orphans.
     /// An error fails every partition rebuild, because a later read could include new uploads.
@@ -426,6 +430,7 @@ impl EffectTasks {
                 has_blob_store: true,
                 ..self.dependencies.validation_config
             },
+            stream_store: self.dependencies.stream_store,
             startup_pending_uploads,
             shutdown: shutdown.clone(),
             tracker: tracker.clone(),
@@ -531,10 +536,15 @@ impl EffectRouter {
                 invocation,
                 attempt,
                 task_id,
+                method_timeout_seconds,
             } => {
                 let key = MethodAttemptKey::new(run_id, run_attempt, &invocation, attempt);
-                self.dispatch
-                    .run_started_attempt(flow.clone(), key, task_id);
+                self.dispatch.run_started_attempt(
+                    flow.clone(),
+                    key,
+                    task_id,
+                    method_timeout_seconds,
+                );
             }
             ApplyEffect::InvocationCanceled { task_id, .. } => {
                 self.dispatch.cancel_attempt(&task_id);
