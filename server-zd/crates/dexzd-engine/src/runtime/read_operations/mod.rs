@@ -159,6 +159,9 @@ impl FlowRuntimeRegistry {
     ///
     /// Every reference must belong to a run of the entry's Flow. Values that no longer exist
     /// are omitted.
+    ///
+    /// Reads only committed state, so no client sees a value that may never commit. Dispatch
+    /// inlines uncommitted values instead.
     pub async fn load_blobs(
         &self,
         tenant_id: TenantId,
@@ -211,6 +214,13 @@ impl FlowRuntimeRegistry {
                 reference.value_id,
             )? {
                 values.insert(reference_text, value);
+            } else {
+                // A Worker that receives no value cannot run its Step.
+                tracing::debug!(
+                    flow_id = %flow.flow_id,
+                    reference = %reference_text,
+                    "LoadBlobs omitted a value reference that names no committed value"
+                );
             }
         }
         Ok(LoadBlobsResponse { values })

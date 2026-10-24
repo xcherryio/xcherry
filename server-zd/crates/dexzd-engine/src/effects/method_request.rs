@@ -9,7 +9,7 @@
 //! Builds the Worker request of a running attempt from the snapshot that apply stored in its
 //! Step execution, with the same fields the Go Server sends.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::row_keys::value_row_key;
@@ -54,9 +54,22 @@ impl MethodRequest {
 pub(crate) struct MethodAttemptState {
     pub(crate) run_record: RunRecord,
     pub(crate) step_execution: StepExecutionRecord,
+    /// The Step execution before uncommitted values were inlined; `None` when none were.
+    step_execution_with_references: Option<StepExecutionRecord>,
 }
 
 impl MethodAttemptState {
+    /// Returns the state with value references in place of inlined uncommitted values, or
+    /// `None` when no value was inlined. Its references resolve once the Flow's commands commit.
+    pub(crate) fn with_value_references(&self) -> Option<MethodAttemptState> {
+        let step_execution = self.step_execution_with_references.clone()?;
+        Some(MethodAttemptState {
+            run_record: self.run_record.clone(),
+            step_execution,
+            step_execution_with_references: None,
+        })
+    }
+
     /// Returns the running invocation; reading the state checked that it exists.
     pub(crate) fn invocation(&self) -> &StepInvocationRecord {
         self.step_execution
@@ -115,11 +128,23 @@ impl MethodAttemptKey {
     }
 }
 
+/// Which value-table values that the Worker request reads become inline values.
+#[derive(Clone, Copy)]
+pub(crate) enum RequestValueHydration<'a> {
+    /// Every value, for `values.hydrateBeforeDispatch`.
+    AllValues,
+    /// Values without a ValueBirth row in the committed view that `open_committed` opens;
+    /// LoadBlobs serves only committed values.
+    UncommittedValues {
+        open_committed: &'a dyn Fn() -> Result<Box<dyn FlowStateReader + Send>, EffectError>,
+    },
+}
+
 /// Reads the state of a running attempt, or `None` when the attempt is no longer running with
 /// this dispatch ID (it finished, was canceled, or time travel replaced the run attempt).
 ///
-/// With `is_hydrating`, value-table references that the Worker request reads become inline values
-/// from the same reader.
+/// Value-table references that the Worker request reads and that `hydration` selects become
+/// inline values from `reader`.
 ///
 /// Returns [`EffectError::InvariantViolation`] when such a held value has no value row.
 pub(crate) fn read_method_attempt_state(
@@ -127,7 +152,7 @@ pub(crate) fn read_method_attempt_state(
     run: RunLocation,
     attempt_key: &MethodAttemptKey,
     task_id: &[u8],
-    is_hydrating: bool,
+    hydration: RequestValueHydration<'_>,
 ) -> Result<Option<MethodAttemptState>, EffectError> {
     let Some(run_record) = read_run_record(reader, run)? else {
         return Ok(None);
@@ -152,21 +177,93 @@ pub(crate) fn read_method_attempt_state(
     if !is_running {
         return Ok(None);
     }
-    if is_hydrating {
-        load_request_values(reader, run, &mut step_execution)?;
-    }
+    let step_execution_with_references = match hydration {
+        RequestValueHydration::AllValues => {
+            load_request_values(reader, run, &mut step_execution, |_| true)?;
+            None
+        }
+        RequestValueHydration::UncommittedValues { open_committed } => {
+            let uncommitted = uncommitted_value_ids(open_committed, run, &mut step_execution)?;
+            if uncommitted.is_empty() {
+                None
+            } else {
+                let with_references = step_execution.clone();
+                load_request_values(reader, run, &mut step_execution, |value_id| {
+                    uncommitted.contains(&value_id)
+                })?;
+                Some(with_references)
+            }
+        }
+    };
     Ok(Some(MethodAttemptState {
         run_record,
         step_execution,
+        step_execution_with_references,
     }))
 }
 
-/// Replaces the value-table references that [`build_method_request`] reads with inline values.
+/// Returns the IDs of the request's value-table values that have no committed ValueBirth row.
+/// Opens the committed view only when the request has such values.
+fn uncommitted_value_ids(
+    open_committed: &dyn Fn() -> Result<Box<dyn FlowStateReader + Send>, EffectError>,
+    run: RunLocation,
+    step_execution: &mut StepExecutionRecord,
+) -> Result<BTreeSet<ValueId>, EffectError> {
+    let mut value_ids = BTreeSet::new();
+    for stored in request_stored_values(step_execution) {
+        value_ids.extend(table_value_id(run, stored)?);
+    }
+    if value_ids.is_empty() {
+        return Ok(value_ids);
+    }
+    let committed = open_committed()?;
+    let mut uncommitted = BTreeSet::new();
+    for value_id in value_ids {
+        let birth_key = value_row_key(run.flow_hash, run.run_id, RunTable::ValueBirth, value_id);
+        if committed.get(ColumnFamily::Flow, &birth_key)?.is_none() {
+            uncommitted.insert(value_id);
+        }
+    }
+    Ok(uncommitted)
+}
+
+/// Replaces the value-table references that [`build_method_request`] reads and that
+/// `should_load` selects with inline values.
 fn load_request_values(
     reader: &dyn FlowStateReader,
     run: RunLocation,
     step_execution: &mut StepExecutionRecord,
+    should_load: impl Fn(ValueId) -> bool,
 ) -> Result<(), EffectError> {
+    for stored in request_stored_values(step_execution) {
+        let Some(value_id) = table_value_id(run, stored)? else {
+            continue;
+        };
+        if !should_load(value_id) {
+            continue;
+        }
+        let key = value_row_key(run.flow_hash, run.run_id, RunTable::Value, value_id);
+        let bytes = reader.get(ColumnFamily::Value, &key)?.ok_or_else(|| {
+            EffectError::InvariantViolation {
+                detail: format!(
+                    "held value {}-{} of run {} has no value row",
+                    value_id.run_seq, value_id.index_in_command, run.run_id
+                ),
+            }
+        })?;
+        let record: ValueRecord = decode_row("Value", &key, &bytes)?;
+        let value = record.value.ok_or_else(|| EffectError::CorruptState {
+            table: "Value",
+            key: run.run_id.to_string(),
+            detail: "value row has no value".to_owned(),
+        })?;
+        stored.kind = Some(stored_value::Kind::InlineValue(value));
+    }
+    Ok(())
+}
+
+/// Returns every stored value that [`build_method_request`] reads.
+fn request_stored_values(step_execution: &mut StepExecutionRecord) -> Vec<&mut StoredValue> {
     let mut stored_values: Vec<&mut StoredValue> = Vec::new();
     stored_values.extend(step_execution.input.as_mut());
     stored_values.extend(stored_key_values(&mut step_execution.locals));
@@ -192,44 +289,26 @@ fn load_request_values(
             }
         }
     }
-    for stored in stored_values {
-        let Some(stored_value::Kind::TableValue(table_value)) = stored.kind.as_ref() else {
-            continue;
-        };
-        let value_id = table_value
-            .value_id
-            .as_ref()
-            .ok_or_else(|| EffectError::CorruptState {
-                table: "StoredValue",
-                key: run.run_id.to_string(),
-                detail: "value-table reference has no value ID".to_owned(),
-            })?;
-        let key = value_row_key(
-            run.flow_hash,
-            run.run_id,
-            RunTable::Value,
-            ValueId {
-                run_seq: value_id.run_seq,
-                index_in_command: value_id.index_in_command,
-            },
-        );
-        let bytes = reader.get(ColumnFamily::Value, &key)?.ok_or_else(|| {
-            EffectError::InvariantViolation {
-                detail: format!(
-                    "held value {}-{} of run {} has no value row",
-                    value_id.run_seq, value_id.index_in_command, run.run_id
-                ),
-            }
-        })?;
-        let record: ValueRecord = decode_row("Value", &key, &bytes)?;
-        let value = record.value.ok_or_else(|| EffectError::CorruptState {
-            table: "Value",
+    stored_values
+}
+
+/// Returns the value ID of a value-table reference, or `None` for any other stored value.
+fn table_value_id(run: RunLocation, stored: &StoredValue) -> Result<Option<ValueId>, EffectError> {
+    let Some(stored_value::Kind::TableValue(table_value)) = stored.kind.as_ref() else {
+        return Ok(None);
+    };
+    let value_id = table_value
+        .value_id
+        .as_ref()
+        .ok_or_else(|| EffectError::CorruptState {
+            table: "StoredValue",
             key: run.run_id.to_string(),
-            detail: "value row has no value".to_owned(),
+            detail: "value-table reference has no value ID".to_owned(),
         })?;
-        stored.kind = Some(stored_value::Kind::InlineValue(value));
-    }
-    Ok(())
+    Ok(Some(ValueId {
+        run_seq: value_id.run_seq,
+        index_in_command: value_id.index_in_command,
+    }))
 }
 
 fn stored_key_values(key_values: &mut [StoredKeyValue]) -> impl Iterator<Item = &mut StoredValue> {

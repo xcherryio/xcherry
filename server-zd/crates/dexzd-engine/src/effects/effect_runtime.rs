@@ -77,6 +77,14 @@ pub trait EffectRuntime: Send + Sync + 'static {
         urgency: CommitUrgency,
     ) -> BoxFuture<'a, Result<CommandReply, EffectRuntimeError>>;
 
+    /// Waits until every command proposed to `flow` before the call has committed.
+    ///
+    /// Returns [`EffectRuntimeError::NodeStopping`] when the runtime halts while waiting.
+    fn sync_barrier<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
+    ) -> BoxFuture<'a, Result<(), EffectRuntimeError>>;
+
     /// Inside the Flow's actor: proposes `StepAttemptStarted` with `task_id` and `pull_routing`
     /// when every lock key of the invocation is free in the overlay lock table and the
     /// in-memory RPC locks, and no earlier waiter queues on any of its keys. The urgency

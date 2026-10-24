@@ -37,12 +37,13 @@ use crate::effects::dispatch::worker_result::{
 };
 use crate::effects::hard_delete_objects::{HardDeleteObjectOwner, HardDeleteUploads};
 use crate::effects::method_request::{
-    MethodAttemptKey, MethodAttemptState, MethodRequest, build_method_request,
-    heartbeat_checkpoint_value, read_method_attempt_state, resolve_method_durability,
+    MethodAttemptKey, MethodAttemptState, MethodRequest, RequestValueHydration,
+    build_method_request, heartbeat_checkpoint_value, read_method_attempt_state,
+    resolve_method_durability,
 };
 use crate::effects::state_reads::{RunLocation, decode_row};
-use crate::effects::{EffectContext, EffectError};
-use crate::runtime::{CommitUrgency, FlowAddress};
+use crate::effects::{EffectContext, EffectError, EffectRuntimeError};
+use crate::runtime::{CommitUrgency, FlowAddress, grpc_code};
 
 const DEFAULT_METHOD_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -97,6 +98,14 @@ impl AttemptFailure {
             is_non_retryable: false,
             served_by_app_worker_id: String::new(),
         }
+    }
+
+    /// Returns true for an error the Step's code returned. SDKs report those with gRPC
+    /// `UNKNOWN`; other codes come from the SDK itself, for example a failed value load.
+    fn is_step_error(&self) -> bool {
+        self.worker_error
+            .as_ref()
+            .is_some_and(|error| error.grpc_status == grpc_code::UNKNOWN)
     }
 }
 
@@ -207,8 +216,24 @@ impl MethodAttempt {
         let key = self.key.clone();
         let task_id = self.task_id.clone();
         let is_hydrating = self.context.config.hydrate_before_dispatch;
+        let runtime = Arc::clone(&self.context.runtime);
+        let flow = self.flow.clone();
         self.read_off_task(true, move |reader| {
-            read_method_attempt_state(reader, run, &key, &task_id, is_hydrating)
+            if is_hydrating {
+                return read_method_attempt_state(
+                    reader,
+                    run,
+                    &key,
+                    &task_id,
+                    RequestValueHydration::AllValues,
+                );
+            }
+            // Opened after `reader`, so fewer of its values still look uncommitted.
+            let open_committed = || Ok(runtime.flow_state_reader(&flow, false)?);
+            let hydration = RequestValueHydration::UncommittedValues {
+                open_committed: &open_committed,
+            };
+            read_method_attempt_state(reader, run, &key, &task_id, hydration)
         })
         .await
     }
@@ -254,6 +279,9 @@ impl MethodAttempt {
 
     /// Reads the hard-delete values and builds the Worker request before the method deadline.
     ///
+    /// When inlined uncommitted values make the request too large, waits until the Flow's
+    /// commands commit and sends their value references instead.
+    ///
     /// Returns the request, or the attempt's end when it was canceled, timed out, or is too large.
     async fn prepare_request(
         &self,
@@ -270,7 +298,24 @@ impl MethodAttempt {
             }
             BeforeDeadline::Done(values) => values?,
         };
-        let request = build_method_request(state, &hard_delete_values)?;
+        let mut request = build_method_request(state, &hard_delete_values)?;
+        if request.encoded_len() > self.context.config.max_worker_request_bytes
+            && let Some(state_with_references) = state.with_value_references()
+        {
+            let commit = self.wait_for_proposed_commands();
+            match self.before_method_deadline(&timeouts.method, commit).await {
+                BeforeDeadline::Canceled => {
+                    return Ok(PreparedRequest::Ended(AttemptEnd::Canceled));
+                }
+                BeforeDeadline::TimedOut => {
+                    return Ok(PreparedRequest::Ended(AttemptEnd::Failure(
+                        timeouts.method.timeout_failure(),
+                    )));
+                }
+                BeforeDeadline::Done(committed) => committed?,
+            }
+            request = build_method_request(&state_with_references, &hard_delete_values)?;
+        }
         if request.encoded_len() > self.context.config.max_worker_request_bytes {
             return Ok(PreparedRequest::Ended(AttemptEnd::Failure(
                 AttemptFailure::server(
@@ -284,6 +329,18 @@ impl MethodAttempt {
             )));
         }
         Ok(PreparedRequest::Ready(Box::new(request)))
+    }
+
+    /// Waits until every command the Flow proposed so far has committed, including the commands
+    /// that wrote this attempt's values.
+    ///
+    /// Returns [`EffectError::Stopped`] when the node stops first.
+    async fn wait_for_proposed_commands(&self) -> Result<(), EffectError> {
+        match self.context.runtime.sync_barrier(&self.flow).await {
+            Ok(()) => Ok(()),
+            Err(EffectRuntimeError::NodeStopping { .. }) => Err(EffectError::Stopped),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Runs `operation` until it succeeds or fails permanently, retrying transient failures.
@@ -634,14 +691,7 @@ impl MethodAttempt {
         sticky_app_worker_id: &str,
         urgency: CommitUrgency,
     ) {
-        tracing::info!(
-            run_id = %self.key.run_id,
-            step_execution_id = %self.key.step_execution_id,
-            attempt = self.key.attempt,
-            kind = ?failure.kind,
-            detail = %failure.server_detail,
-            "method attempt failed"
-        );
+        self.log_failure(&failure);
         let command = self.flow_command(flow_command::Command::StepAttemptFailed(
             StepAttemptFailedCommand {
                 invocation: Some(self.key.invocation()),
@@ -661,6 +711,41 @@ impl MethodAttempt {
             .context
             .propose_until_committed(&self.flow, command, urgency)
             .await;
+    }
+
+    /// Logs the failure with its Worker error; failures other than a Step's own error are warnings.
+    fn log_failure(&self, failure: &AttemptFailure) {
+        let worker_error = failure.worker_error.as_ref();
+        let worker_detail = worker_error.map_or("", |error| error.detail.as_str());
+        let worker_error_type = worker_error.map_or("", |error| error.error_type.as_str());
+        let worker_grpc_status = worker_error.map_or(0, |error| error.grpc_status);
+        if failure.is_step_error() {
+            tracing::info!(
+                flow_id = %self.flow.flow_id,
+                run_id = %self.key.run_id,
+                step_execution_id = %self.key.step_execution_id,
+                attempt = self.key.attempt,
+                kind = ?failure.kind,
+                detail = %failure.server_detail,
+                worker_detail,
+                worker_error_type,
+                worker_grpc_status,
+                "method attempt failed"
+            );
+        } else {
+            tracing::warn!(
+                flow_id = %self.flow.flow_id,
+                run_id = %self.key.run_id,
+                step_execution_id = %self.key.step_execution_id,
+                attempt = self.key.attempt,
+                kind = ?failure.kind,
+                detail = %failure.server_detail,
+                worker_detail,
+                worker_error_type,
+                worker_grpc_status,
+                "method attempt failed"
+            );
+        }
     }
 
     fn flow_command(&self, command: flow_command::Command) -> FlowCommand {
