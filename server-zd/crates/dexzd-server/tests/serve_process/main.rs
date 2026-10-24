@@ -11,6 +11,7 @@
 #![cfg(unix)]
 
 mod harness;
+mod standby_takeover;
 
 use std::time::Duration;
 

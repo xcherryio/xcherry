@@ -127,6 +127,32 @@ impl S3Emulator {
             .is_empty()
     }
 
+    /// Returns every key in `bucket` that starts with `prefix`, in key order.
+    pub(crate) fn keys_under(&self, bucket: &str, prefix: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut continuation_token = None;
+        loop {
+            let page = self
+                .store
+                .list_objects(
+                    bucket,
+                    &ListObjectsRequest {
+                        prefix: prefix.to_owned(),
+                        delimiter: String::new(),
+                        max_keys: 1_000,
+                        continuation_token,
+                        start_after: None,
+                    },
+                )
+                .expect("the emulator lists objects");
+            keys.extend(page.objects.into_iter().map(|object| object.key));
+            if !page.is_truncated {
+                return keys;
+            }
+            continuation_token = page.next_continuation_token;
+        }
+    }
+
     /// Replaces the emulator's fault rules with `rules`, a JSON array of s3mock fault rules.
     pub(crate) async fn set_fault_rules(&self, rules: &str) {
         let response = self
@@ -187,8 +213,18 @@ pub(crate) struct ParadeDbSettings<'a> {
 }
 
 impl ServeConfig<'_> {
-    /// Writes the YAML file that `serve --config` reads.
+    /// Writes the YAML file that `serve --config` reads, with hourly snapshots.
     pub(crate) fn write(&self, path: &Path) {
+        self.write_with_snapshot_schedule(path, "1h", "24h");
+    }
+
+    /// Writes the YAML file with the given `snapshot.interval` and `snapshot.logDeletionDelay`.
+    pub(crate) fn write_with_snapshot_schedule(
+        &self,
+        path: &Path,
+        snapshot_interval: &str,
+        log_deletion_delay: &str,
+    ) {
         let hard_delete_store = match self.hard_delete_endpoint {
             Some(endpoint) => format!(
                 "  hardDeleteStore:\n    endpoint: {endpoint}\n    region: us-east-1\n    bucket: {}\n    prefix: hard-delete\n    forcePathStyle: true\n    credentialsSource: anonymous\n",
@@ -204,7 +240,7 @@ impl ServeConfig<'_> {
             None => "search:\n  backend: builtin\n".to_owned(),
         };
         let contents = format!(
-            "cluster:\n  nodeId: {node_id}\n  partitionCount: 16\nobjectStore:\n  endpoint: {endpoint}\n  region: us-east-1\n  bucket: {bucket}\n  prefix: {prefix}\n  forcePathStyle: true\n  credentialsSource: environment\n{hard_delete_store}localStorage:\n  directory: {directory}\n  blockCacheBytes: 16777216\nlease:\n  duration: {lease}\n  failIfHeld: {fail_if_held}\nsnapshot:\n  interval: 1h\n  retainedCount: 2\napi:\n  listen: \"{listen}\"\n{search}",
+            "cluster:\n  nodeId: {node_id}\n  partitionCount: 16\nobjectStore:\n  endpoint: {endpoint}\n  region: us-east-1\n  bucket: {bucket}\n  prefix: {prefix}\n  forcePathStyle: true\n  credentialsSource: environment\n{hard_delete_store}localStorage:\n  directory: {directory}\n  blockCacheBytes: 16777216\nlease:\n  duration: {lease}\n  failIfHeld: {fail_if_held}\nsnapshot:\n  interval: {snapshot_interval}\n  logDeletionDelay: {log_deletion_delay}\n  retainedCount: 2\napi:\n  listen: \"{listen}\"\n{search}",
             node_id = super::NODE_ID,
             endpoint = self.primary_endpoint,
             bucket = super::PRIMARY_BUCKET,
@@ -274,6 +310,14 @@ impl ServeProcess {
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// Returns whether every readiness name reports SERVING within `budget`.
+    pub(crate) async fn is_serving_within(&self, budget: Duration) -> bool {
+        matches!(
+            tokio::time::timeout(budget, self.serving_channel()).await,
+            Ok(Some(_))
+        )
     }
 
     async fn serving_channel(&self) -> Option<Channel> {
