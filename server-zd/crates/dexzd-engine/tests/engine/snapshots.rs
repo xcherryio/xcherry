@@ -433,6 +433,95 @@ async fn retention_limits_snapshot_listing_pages_per_run() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn retention_resumes_a_backlog_with_a_bounded_candidate_budget() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::ZERO;
+    let test = cluster.start_with(&config).await.expect("node starts");
+    test.commit_prompt("bounded-candidates-flow", 1).await;
+    let retained_snapshot = test.node.take_snapshot().await.expect("first snapshot");
+    let retained_manifest = cluster
+        .object_store
+        .get(&retained_snapshot.manifest_key)
+        .await
+        .expect("read retained manifest")
+        .expect("retained manifest exists");
+    let retained_files = SnapshotManifest::decode(retained_manifest.bytes)
+        .expect("decode retained manifest")
+        .files;
+    assert!(!retained_files.is_empty());
+
+    for index in 0..65 {
+        let key = format!("snapshot/node-a/backlog/files/orphan-{index:03}");
+        cluster
+            .object_store
+            .put(&key, Bytes::new(), WriteCondition::CreateOnly)
+            .await
+            .expect("upload orphan");
+    }
+    test.node.take_snapshot().await.expect("mark backlog");
+    let head_count_before = cluster
+        .object_store
+        .call_count(ObjectStoreOperation::Head, "snapshot/node-a/backlog/files/");
+    assert_eq!(head_count_before, 0);
+
+    test.node.take_snapshot().await.expect("sweep first page");
+    let head_count_after_first_sweep = cluster
+        .object_store
+        .call_count(ObjectStoreOperation::Head, "snapshot/node-a/backlog/files/");
+    assert_eq!(head_count_after_first_sweep - head_count_before, 64);
+    assert!(
+        cluster
+            .object_store
+            .get("snapshot/node-a/backlog/files/orphan-000")
+            .await
+            .expect("read first orphan")
+            .is_none()
+    );
+    assert!(
+        cluster
+            .object_store
+            .get("snapshot/node-a/backlog/files/orphan-064")
+            .await
+            .expect("read pending orphan")
+            .is_some()
+    );
+    for file in &retained_files {
+        assert!(
+            cluster
+                .object_store
+                .get(&file.object_key)
+                .await
+                .expect("read referenced file")
+                .is_some(),
+            "{} remains referenced by the retained manifest",
+            file.object_key
+        );
+    }
+
+    test.node
+        .take_snapshot()
+        .await
+        .expect("resume backlog sweep");
+    let head_count_after_second_sweep = cluster
+        .object_store
+        .call_count(ObjectStoreOperation::Head, "snapshot/node-a/backlog/files/");
+    assert_eq!(
+        head_count_after_second_sweep - head_count_after_first_sweep,
+        1
+    );
+    assert!(
+        cluster
+            .object_store
+            .get("snapshot/node-a/backlog/files/orphan-064")
+            .await
+            .expect("read final orphan")
+            .is_none()
+    );
+    test.node.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
 async fn idle_orphan_cleanup_reconsiders_a_file_after_the_delay() {
     let mut cluster = TestCluster::new();
     let mut config = cluster.config(LocalStoreConfig::InMemory);
