@@ -295,6 +295,25 @@ fn client_request_variants_preserve_go_messages() {
         validate_client_request(ClientRequest::InvokeRpc(&invocation), &config),
         "RPC timeout must be non-negative",
     );
+    let empty_lock_key = dex::InvokeRpcRequest {
+        flow_id: "flow".into(),
+        rpc_name: "getStatus".into(),
+        request_id: "request".into(),
+        lock_attribute_keys: vec!["counter".into(), String::new()],
+        ..dex::InvokeRpcRequest::default()
+    };
+    assert_invalid(
+        validate_client_request(ClientRequest::InvokeRpc(&empty_lock_key), &config),
+        "lock attribute key is empty",
+    );
+    let whitespace_lock_key = dex::InvokeRpcRequest {
+        lock_attribute_keys: vec![" ".into(), "counter".into(), "counter".into()],
+        ..empty_lock_key.clone()
+    };
+    assert!(
+        validate_client_request(ClientRequest::InvokeRpc(&whitespace_lock_key), &config).is_ok(),
+        "the Go Server accepts whitespace and duplicate lock keys"
+    );
 
     let update = dex::UpdateFlowConfigRequest {
         flow_id: "flow".into(),
