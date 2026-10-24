@@ -196,34 +196,30 @@ impl MethodAttempt {
         }
     }
 
-    /// Reads the attempt's state on a blocking thread so that a stalled read cannot hold off
-    /// the method deadline.
+    /// Reads the attempt's state with the store reads on a blocking thread, so that a stalled
+    /// read cannot hold off the method deadline. Opening the snapshot view does no I/O.
     ///
     /// Returns the state, `None` when the attempt is no longer running with this dispatch ID,
     /// or the read's error.
     async fn read_attempt_state(&self) -> Result<Option<MethodAttemptState>, EffectError> {
-        let flow = self.flow.clone();
+        let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
         let run = self.run;
         let key = self.key.clone();
         let task_id = self.task_id.clone();
-        self.read_off_task(move |context| {
-            let reader = context.runtime.flow_state_reader(&flow, true)?;
-            read_method_attempt_state(reader.as_ref(), run, &key, &task_id)
-        })
-        .await
+        self.read_off_task(move || read_method_attempt_state(reader.as_ref(), run, &key, &task_id))
+            .await
     }
 
-    /// Runs a synchronous state read on the blocking pool.
+    /// Runs synchronous store reads on the blocking pool.
     ///
     /// Returns the read's result, or [`EffectError::Stopped`] when the runtime shut down before
     /// the read ran. A panic in `read` resumes on this task.
     async fn read_off_task<T: Send + 'static>(
         &self,
-        read: impl FnOnce(&EffectContext) -> Result<T, EffectError> + Send + 'static,
+        read: impl FnOnce() -> Result<T, EffectError> + Send + 'static,
     ) -> Result<T, EffectError> {
-        let context = Arc::clone(&self.context);
         // Dropping the handle at the deadline detaches the read; it ends with its store call.
-        let handle = tokio::task::spawn_blocking(move || read(&context));
+        let handle = tokio::task::spawn_blocking(read);
         match handle.await {
             Ok(result) => result,
             Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
@@ -322,9 +318,8 @@ impl MethodAttempt {
         attribute_key: &str,
     ) -> Result<Option<String>, EffectError> {
         let key = hard_delete_current_key(self.run.flow_hash, self.run.run_id, attribute_key);
-        let flow = self.flow.clone();
-        self.read_off_task(move |context| {
-            let reader = context.runtime.flow_state_reader(&flow, false)?;
+        let reader = self.context.runtime.flow_state_reader(&self.flow, false)?;
+        self.read_off_task(move || {
             let Some(bytes) = reader.get(ColumnFamily::Flow, &key)? else {
                 return Ok(None);
             };

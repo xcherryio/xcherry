@@ -360,7 +360,6 @@ impl EffectRuntime for ApplyRuntime {
         _flow: &FlowAddress,
         _include_speculative: bool,
     ) -> Result<Box<dyn FlowStateReader + Send>, EffectRuntimeError> {
-        let read = StateReadGate::begin_read(&self.state_read_gate);
         if self.is_flow_state_unreadable.load(Ordering::SeqCst) {
             return Err(EffectRuntimeError::Unavailable {
                 detail: "injected state reader outage".to_owned(),
@@ -368,7 +367,7 @@ impl EffectRuntime for ApplyRuntime {
         }
         Ok(Box::new(GatedStateReader {
             state: self.snapshot(),
-            _read: read,
+            read: StateReadInProgress::begin(&self.state_read_gate),
         }))
     }
 
@@ -379,7 +378,7 @@ impl EffectRuntime for ApplyRuntime {
     }
 }
 
-/// Holds state reads from blocking threads while closed, like a stalled local store read;
+/// Holds store reads on blocking threads while closed, like a stalled local store read;
 /// runtime-thread reads pass.
 pub(super) struct StateReadGate {
     runtime_thread: ThreadId,
@@ -391,10 +390,10 @@ pub(super) struct StateReadGate {
 struct StateReadGateState {
     is_closed: bool,
     held_reads: usize,
-    /// Reads on blocking threads whose reader is still alive.
-    running_reads: usize,
-    /// Paused time at which the last read on a blocking thread dropped its reader.
-    last_read_ended_at: Option<tokio::time::Instant>,
+    /// Readers still alive; the effect runner may hand one to a blocking thread.
+    open_readers: usize,
+    /// Paused time at which a reader last dropped on a blocking thread.
+    last_blocking_read_ended_at: Option<tokio::time::Instant>,
 }
 
 impl StateReadGate {
@@ -440,51 +439,59 @@ impl StateReadGate {
         );
     }
 
-    /// Returns true while a read on a blocking thread may not have reached its attempt yet.
+    /// Returns true while a reader is open, or one dropped on a blocking thread at this instant.
     ///
     /// Paused time cannot advance during a blocking task, so a read that ended earlier has woken
     /// its attempt.
     fn may_have_unconsumed_reads(&self) -> bool {
         let state = self.state.lock().expect("lock");
-        state.running_reads > 0 || state.last_read_ended_at == Some(tokio::time::Instant::now())
+        state.open_readers > 0
+            || state.last_blocking_read_ended_at == Some(tokio::time::Instant::now())
     }
 
-    /// Tracks a read made off the runtime thread and holds it while the gate is closed.
-    fn begin_read(gate: &Arc<Self>) -> Option<StateReadInProgress> {
-        if std::thread::current().id() == gate.runtime_thread {
-            return None;
+    fn hold_while_closed(&self) {
+        if std::thread::current().id() == self.runtime_thread {
+            return;
         }
-        let mut state = gate.state.lock().expect("lock");
-        state.running_reads += 1;
-        if state.is_closed {
-            state.held_reads += 1;
-            gate.changed.notify_all();
-            state = gate
-                .changed
-                .wait_while(state, |state| state.is_closed)
-                .expect("lock");
-            state.held_reads -= 1;
-            gate.changed.notify_all();
+        let mut state = self.state.lock().expect("lock");
+        if !state.is_closed {
+            return;
         }
-        Some(StateReadInProgress(Arc::clone(gate)))
+        state.held_reads += 1;
+        self.changed.notify_all();
+        state = self
+            .changed
+            .wait_while(state, |state| state.is_closed)
+            .expect("lock");
+        state.held_reads -= 1;
+        self.changed.notify_all();
     }
 }
 
-/// Ends a tracked read when dropped.
+/// Tracks one open reader from its creation until it drops.
 struct StateReadInProgress(Arc<StateReadGate>);
+
+impl StateReadInProgress {
+    fn begin(gate: &Arc<StateReadGate>) -> Self {
+        gate.state.lock().expect("lock").open_readers += 1;
+        Self(Arc::clone(gate))
+    }
+}
 
 impl Drop for StateReadInProgress {
     fn drop(&mut self) {
         let mut state = self.0.state.lock().expect("lock");
-        state.running_reads -= 1;
-        state.last_read_ended_at = Some(tokio::time::Instant::now());
+        state.open_readers -= 1;
+        if std::thread::current().id() != self.0.runtime_thread {
+            state.last_blocking_read_ended_at = Some(tokio::time::Instant::now());
+        }
     }
 }
 
-/// A snapshot reader that ends its tracked read when the effect runner drops it.
+/// A snapshot reader whose store reads pass the [`StateReadGate`].
 struct GatedStateReader {
     state: MemoryState,
-    _read: Option<StateReadInProgress>,
+    read: StateReadInProgress,
 }
 
 impl FlowStateReader for GatedStateReader {
@@ -493,6 +500,7 @@ impl FlowStateReader for GatedStateReader {
         column_family: ColumnFamily,
         key: &[u8],
     ) -> Result<Option<Vec<u8>>, StateReadError> {
+        self.read.0.hold_while_closed();
         self.state.get(column_family, key)
     }
 
@@ -503,6 +511,7 @@ impl FlowStateReader for GatedStateReader {
         end: &[u8],
         limit: usize,
     ) -> Result<Vec<StateRow>, StateReadError> {
+        self.read.0.hold_while_closed();
         self.state.scan(column_family, start, end, limit)
     }
 }
