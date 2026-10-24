@@ -19,6 +19,9 @@ use std::path::PathBuf;
 
 const DEFAULT_SEED_COUNT: u64 = 64;
 const DEFAULT_COMMANDS_PER_SEED: usize = 400;
+const MAX_SEED_COUNT: u64 = 1000;
+const MAX_COMMANDS_PER_SEED: usize = 2000;
+const MAX_RANDOM_COMMANDS: u64 = 500_000;
 /// First seed of the fixed set; any constant keeps the set reproducible.
 const FIRST_SEED: u64 = 0x5eed_0000;
 const REGRESSION_SEEDS: &str = include_str!("../regression-seeds.txt");
@@ -31,14 +34,31 @@ fn environment_number(name: &str) -> Option<u64> {
     )
 }
 
+fn environment_command_count() -> usize {
+    let commands =
+        environment_number("DEXZD_SIMULATION_COMMANDS").unwrap_or(DEFAULT_COMMANDS_PER_SEED as u64);
+    assert!(
+        (1..=MAX_COMMANDS_PER_SEED as u64).contains(&commands),
+        "DEXZD_SIMULATION_COMMANDS must be an integer from 1 to {MAX_COMMANDS_PER_SEED}"
+    );
+    commands as usize
+}
+
 #[test]
 fn apply_keeps_every_invariant_over_random_command_sequences() {
-    let commands = environment_number("DEXZD_SIMULATION_COMMANDS")
-        .map_or(DEFAULT_COMMANDS_PER_SEED, |count| count as usize);
+    let commands = environment_command_count();
     let seeds: BTreeMap<u64, usize> = match environment_number("DEXZD_SIMULATION_SEED") {
         Some(seed) => BTreeMap::from([(seed, commands)]),
         None => {
             let count = environment_number("DEXZD_SIMULATION_SEEDS").unwrap_or(DEFAULT_SEED_COUNT);
+            assert!(
+                (1..=MAX_SEED_COUNT).contains(&count),
+                "DEXZD_SIMULATION_SEEDS must be an integer from 1 to {MAX_SEED_COUNT}"
+            );
+            assert!(
+                count * commands as u64 <= MAX_RANDOM_COMMANDS,
+                "random simulation budget exceeds {MAX_RANDOM_COMMANDS} commands"
+            );
             let first_seed = environment_number("DEXZD_SIMULATION_BASE_SEED").unwrap_or(FIRST_SEED);
             let end_seed = first_seed
                 .checked_add(count)

@@ -52,6 +52,17 @@ jobs:
           workspaces: server-zd
           shared-key: server-zd-test
           save-if: false
+      - name: Validate apply simulation budget
+        shell: bash
+        run: |
+          if ! [[ "$DEXZD_SIMULATION_SEEDS" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$DEXZD_SIMULATION_COMMANDS" =~ ^[1-9][0-9]*$ ]] ||
+             (( ${#DEXZD_SIMULATION_SEEDS} > 4 || ${#DEXZD_SIMULATION_COMMANDS} > 4 )) ||
+             (( DEXZD_SIMULATION_SEEDS > 1000 || DEXZD_SIMULATION_COMMANDS > 2000 )) ||
+             (( DEXZD_SIMULATION_SEEDS * DEXZD_SIMULATION_COMMANDS > 500000 )); then
+            echo 'Use 1–1000 seeds, 1–2000 commands per seed, and at most 500000 random commands.' >&2
+            exit 1
+          fi
       - name: Choose random base seed
         run: |
           base_seed=$(od -An -N4 -tu4 /dev/urandom | tr -d '[:space:]')

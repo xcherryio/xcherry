@@ -27,6 +27,8 @@ Each line in that file contains a decimal seed and the command count needed to r
 The checked-in seed also runs for 1,000 commands. Nightly runs set `DEXZD_SIMULATION_BASE_SEED`
 to a printed random starting seed, then use `DEXZD_SIMULATION_SEEDS` consecutive seeds and
 `DEXZD_SIMULATION_COMMANDS` commands per seed. The single-seed override runs only that seed.
+Manual runs accept 1–1,000 random seeds and 1–2,000 commands per seed, with at most 500,000
+random commands total. The fixed regression seeds run in addition to that random budget.
 
 When a nightly run fails, download its failure artifact. Each seed has a report containing the
 failing command index and shrunk command sequence. Reproduce the failure from `server-zd/` with
