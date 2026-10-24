@@ -70,7 +70,7 @@ async fn a_new_incarnation_keeps_post_snapshot_writes_after_local_disk_loss() {
     assert_eq!(third.committed_count("incarnation-flow").await, 7);
     third.commit_prompt("incarnation-flow", 1).await;
     assert_eq!(third.committed_count("incarnation-flow").await, 8);
-    third.node.shutdown().await;
+    third.node.shutdown().await.expect("lease released");
 
     config.node.incarnation = 1;
     let result = cluster.start_with(&config).await;
@@ -135,7 +135,7 @@ async fn a_snapshot_of_the_new_incarnation_reclaims_the_closed_log_stream() {
 
     let restarted = cluster.start_with(&config).await.expect("node restarts");
     assert_eq!(restarted.committed_count("reclaimed-flow").await, 6);
-    restarted.node.shutdown().await;
+    restarted.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -148,7 +148,7 @@ async fn a_new_incarnation_applies_new_batches_to_the_reused_rocksdb_store() {
     });
     let first = cluster.start_with(&config).await.expect("node starts");
     first.commit_prompt("reused-flow", 4).await;
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
 
     config.node.incarnation = 2;
     let second = cluster
@@ -159,12 +159,12 @@ async fn a_new_incarnation_applies_new_batches_to_the_reused_rocksdb_store() {
     assert_eq!(second.committed_count("reused-flow").await, 4);
     second.commit_prompt("reused-flow", 3).await;
     assert_eq!(second.committed_count("reused-flow").await, 7);
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 
     let third = cluster.start_with(&config).await.expect("node restarts");
     assert!(third.applier.applied_commands().is_empty());
     assert_eq!(third.committed_count("reused-flow").await, 7);
-    third.node.shutdown().await;
+    third.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -206,7 +206,7 @@ async fn an_interrupted_incarnation_change_completes_on_the_next_start() {
     assert_eq!(recovered.committed_count("interrupted-flow").await, 2);
     recovered.commit_prompt("interrupted-flow", 1).await;
     assert_eq!(recovered.committed_count("interrupted-flow").await, 3);
-    recovered.node.shutdown().await;
+    recovered.node.shutdown().await.expect("lease released");
     assert!(
         segments_by_partition(&cluster)
             .await
@@ -220,7 +220,7 @@ async fn a_different_node_id_fails_startup_before_taking_a_lease() {
     let mut cluster = TestCluster::new();
     let first = cluster.start_in_memory().await;
     first.commit_prompt("owned-flow", 2).await;
-    first.node.shutdown().await;
+    first.node.shutdown().await.expect("lease released");
 
     let mut config = cluster.config(LocalStoreConfig::InMemory);
     config.node.node_id = "node-b".to_owned();
@@ -245,5 +245,5 @@ async fn a_different_node_id_fails_startup_before_taking_a_lease() {
 
     let restarted = cluster.start_in_memory().await;
     assert_eq!(restarted.committed_count("owned-flow").await, 2);
-    restarted.node.shutdown().await;
+    restarted.node.shutdown().await.expect("lease released");
 }

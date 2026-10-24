@@ -26,7 +26,9 @@ pub use replay_checks::{ReplayCheck, ReplayMismatch};
 pub(crate) use command_committer::CommandCommitterParts;
 pub(crate) use commit_state::CommitState;
 pub(crate) use log_proposer::{CommitProgress, CommittedBatchRouter, run_log_proposer};
-pub(crate) use partition_applier::{FrameApplier, PartitionApplierPool, PartitionFrame};
+pub(crate) use partition_applier::{
+    AppliedPositionAdvancer, FrameApplier, PartitionApplierPool, PartitionFrame,
+};
 
 /// Local store type the engine runs on: RocksDB in production, in memory in simulations.
 pub type EngineLocalStore = dexzd_storage::RestoredLocalStore;

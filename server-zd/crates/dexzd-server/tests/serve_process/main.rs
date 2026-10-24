@@ -11,6 +11,8 @@
 #![cfg(unix)]
 
 mod harness;
+mod lease_release;
+mod standby_takeover;
 
 use std::time::Duration;
 

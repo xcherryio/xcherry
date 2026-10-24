@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -370,6 +371,11 @@ impl SwitchableFaults {
         self.arm_delay(ObjectStoreOperation::Get, key, false, delay);
     }
 
+    /// Delays the next read of a key under `prefix` by `delay`.
+    pub(crate) fn delay_next_get_under(&self, prefix: &str, delay: Duration) {
+        self.arm_delay(ObjectStoreOperation::Get, prefix, true, delay);
+    }
+
     /// Delays the next write of a key under `prefix` by `delay`.
     pub(crate) fn delay_next_put_under(&self, prefix: &str, delay: Duration) {
         self.arm_delay(ObjectStoreOperation::Put, prefix, true, delay);
@@ -392,6 +398,21 @@ impl SwitchableFaults {
             .iter()
             .filter(|(recorded, key)| *recorded == operation && is_counted(key))
             .count()
+    }
+
+    /// Counts recorded operations of one kind per key, for keys under `prefix`.
+    pub(crate) fn count_operations_per_key(
+        &self,
+        operation: ObjectStoreOperation,
+        prefix: &str,
+    ) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for (recorded, key) in self.operations.lock().expect("fault lock").iter() {
+            if *recorded == operation && key.starts_with(prefix) {
+                *counts.entry(key.clone()).or_insert(0) += 1;
+            }
+        }
+        counts
     }
 
     fn arm_delay(
