@@ -95,6 +95,7 @@ func TestPullWorkerRoutingTemporal(t *testing.T) {
 	if !*temporalIntegTest || *dexServerAddress != "" {
 		t.Skip()
 	}
+	requireGoServerSetting(t, "Go Server internals")
 	testPullWorkerRouting(t, service.BackendTypeTemporal)
 }
 

@@ -45,6 +45,8 @@ func TestTemporalMetrics(t *testing.T) {
 	if *dexServerAddress != "" {
 		t.Skip("metrics handler injection requires an in-process Dex server")
 	}
+	// C10: server-zd does not emit Temporal mechanism metrics.
+	requireGoServerSetting(t, "Temporal metrics handler")
 
 	metricsHandler, metricsURL := startPrometheusMetricsEndpoint(t)
 	configureMetrics := func(testConfig *DexServiceTestConfig) {

@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 
 use dexzd_protocol::dex::IndexType;
 use dexzd_visibility_query::{
-    FieldRegistry, SearchDocument, SearchValue, SortDirection, compare_documents, evaluate,
-    parse_and_check,
+    Expression, FieldRegistry, Literal, Operator, SearchDocument, SearchValue, SortDirection,
+    compare_documents, evaluate, parse_and_check,
 };
 
 #[derive(Default)]
@@ -44,6 +44,8 @@ fn registry() -> FieldRegistry {
         ("datetime1", IndexType::Datetime),
         ("array1", IndexType::KeywordArray),
         ("CustomKeywordField", IndexType::Keyword),
+        ("CustomDatetimeField", IndexType::Datetime),
+        ("CustomDoubleField", IndexType::Double),
         ("Custom Key", IndexType::Keyword),
         ("OrderNumber", IndexType::Keyword),
         ("NOT", IndexType::Keyword),
@@ -111,9 +113,26 @@ fn evaluates_all_operators_and_types() {
         "int1 BETWEEN 6 AND 8",
         "int1 > -1",
         "int1 <= 7",
+        "int1 = '7'",
+        "int1 = \"7\"",
+        "int1 = '+7'",
+        "int1 = '0007'",
+        "int1 != '8'",
+        "int1 > '-1'",
+        "int1 IN ('6', 7)",
+        "int1 NOT IN ('6', '8')",
+        "int1 BETWEEN '6' AND 8",
         "double1 = 14000.5",
         "double1 = 1.40005e4",
         "double1 >= 14000",
+        "double1 = '14000.5'",
+        "double1 = \"1.40005e4\"",
+        "double1 = '+14000.50'",
+        "double1 = '14000.5e0'",
+        "double1 >= '14000'",
+        "double1 < '1.5E4'",
+        "double1 IN ('1', 14000.5)",
+        "double1 BETWEEN '14000.' AND '14001'",
         "bool1 = TRUE",
         "bool1 = 'true'",
         "bool1 != false",
@@ -144,6 +163,13 @@ fn evaluates_all_operators_and_types() {
         "array1 != 'charge'",
         "array1 NOT IN ('ship')",
         "int1 BETWEEN 8 AND 9",
+        "int1 = '8'",
+        "int1 IN ('6', '8')",
+        "int1 BETWEEN '8' AND '9'",
+        "double1 = '0.01'",
+        "double1 != '14000.5'",
+        "double1 < '.5'",
+        "double1 NOT IN ('14000.5')",
         "bool1 = false",
         "StartTime < '2026-07-02T00:00:00Z'",
         "ExecutionStatus = 'ContinuedAsNew'",
@@ -191,8 +217,29 @@ fn errors_have_byte_offsets_and_specific_reasons() {
     for (query, offset, reason) in [
         ("unknown = 'x'", 0, "unknown visibility field"),
         ("é = 'x'", 0, "unknown visibility field"),
-        ("int1 = '7'", 7, "expected Int literal"),
+        (
+            "int1 = 'seven'",
+            7,
+            "invalid INT literal for int1: \"seven\"",
+        ),
+        ("int1 = ''", 7, "invalid INT literal"),
+        ("int1 = ' 7'", 7, "invalid INT literal"),
+        ("int1 = '9223372036854775808'", 7, "out of range"),
+        ("int1 IN (6, 'x')", 12, "invalid INT literal"),
         ("int1 = 1e3", 7, "expected Int literal"),
+        (
+            "double1 = 'abc'",
+            10,
+            "invalid DOUBLE literal for double1: \"abc\"",
+        ),
+        ("double1 = ' 0.01'", 10, "is not a decimal number"),
+        ("double1 = '0.01 '", 10, "is not a decimal number"),
+        ("double1 = '1,000'", 10, "is not a decimal number"),
+        ("double1 = 'NaN'", 10, "is not a decimal number"),
+        ("double1 = '-Infinity'", 10, "is not a decimal number"),
+        ("double1 = '1e999'", 10, "out of range"),
+        ("double1 IN ('1', 'two')", 17, "invalid DOUBLE literal"),
+        ("double1 STARTS_WITH '1'", 8, "unsupported for double1"),
         ("keyword1 = true", 11, "expected Keyword literal"),
         ("text1 > 'a'", 6, "unsupported for text1"),
         ("array1 BETWEEN 'a' AND 'b'", 7, "unsupported for array1"),
@@ -229,6 +276,199 @@ fn errors_have_byte_offsets_and_specific_reasons() {
         let error = parse_and_check(query, &registry()).expect_err(query);
         assert_eq!(error.offset, offset, "{query}: {error}");
         assert!(error.message.contains(reason), "{query}: {error}");
+    }
+}
+
+#[test]
+fn quoted_int_truncation_and_binary64_fractional_bounds_are_rewritten() {
+    let seven = Document::default().with("int1", SearchValue::Int(7));
+    let eight = Document::default().with("int1", SearchValue::Int(8));
+    let negative_two = Document::default().with("int1", SearchValue::Int(-2));
+    let negative_one = Document::default().with("int1", SearchValue::Int(-1));
+    let two = Document::default().with("int1", SearchValue::Int(2));
+    let three = Document::default().with("int1", SearchValue::Int(3));
+    let thousand = Document::default().with("int1", SearchValue::Int(1000));
+    let exact = Document::default().with("int1", SearchValue::Int(9_007_199_254_740_993));
+    let missing = Document::default();
+    for query in ["int1 = '7.0'", "int1 = '7e0'", "int1 = '7.'"] {
+        assert!(evaluate(&check(query), &seven), "{query}");
+    }
+    assert!(evaluate(&check("int1 = '1e3'"), &thousand));
+    for query in ["int1 = '9007199254740993'", "int1 = '9007199254740993.0'"] {
+        assert!(evaluate(&check(query), &exact), "{query}");
+        assert!(!evaluate(&check(query), &seven), "{query}");
+    }
+    for query in ["int1 = '7.5'", "int1 IN ('7.5')"] {
+        assert!(matches!(check(query).expression(), Expression::NoMatch(_)));
+        assert!(!evaluate(&check(query), &seven), "{query}");
+        assert!(!evaluate(&check(query), &eight), "{query}");
+        assert!(!evaluate(&check(format!("NOT {query}").as_str()), &missing));
+    }
+    assert!(evaluate(&check("int1 IN ('7', '7.5')"), &seven));
+    assert!(!evaluate(&check("int1 IN ('7', '7.5')"), &eight));
+    assert!(evaluate(&check("int1 > '7.5'"), &eight));
+    assert!(!evaluate(&check("int1 > '7.5'"), &seven));
+    assert!(evaluate(&check("int1 >= '7.5'"), &eight));
+    assert!(evaluate(&check("int1 <= '7.5'"), &seven));
+    assert!(evaluate(&check("int1 >= '-1.5'"), &negative_one));
+    assert!(!evaluate(&check("int1 >= '-1.5'"), &negative_two));
+    assert!(evaluate(&check("int1 <= '-1.5'"), &negative_two));
+    assert!(!evaluate(&check("int1 <= '-1.5'"), &two));
+    assert!(!evaluate(&check("int1 = '.5'"), &seven));
+    assert!(evaluate(&check("int1 BETWEEN '1.5' AND '3.5'"), &two));
+    assert!(evaluate(&check("int1 BETWEEN '1.5' AND '3.5'"), &three));
+    assert!(!evaluate(&check("int1 BETWEEN '1.5' AND '1.6'"), &two));
+    assert!(evaluate(&check("int1 != '7.5'"), &seven));
+    assert!(!evaluate(&check("int1 != '7.5'"), &missing));
+    assert!(evaluate(&check("int1 NOT IN ('7.5')"), &seven));
+    assert!(!evaluate(&check("int1 NOT IN ('7.5')"), &missing));
+    assert!(evaluate(&check("int1 NOT IN ('7', '7.5')"), &eight));
+    assert!(!evaluate(&check("int1 NOT IN ('7', '7.5')"), &seven));
+
+    let query = check("int1 BETWEEN '1.5' AND '3.5'");
+    let Expression::Predicate(predicate) = query.expression() else {
+        panic!("BETWEEN must remain an INT predicate");
+    };
+    assert_eq!(predicate.operator(), Operator::Between);
+    assert!(matches!(
+        predicate.literals(),
+        [Literal::Int(2), Literal::Int(3)]
+    ));
+    assert!(matches!(
+        check("int1 = '9007199254740993.0'").expression(),
+        Expression::Predicate(predicate)
+            if matches!(predicate.literals(), [Literal::Int(9_007_199_254_740_993)])
+    ));
+}
+
+#[test]
+fn quoted_int_binary64_boundaries_follow_elasticsearch_long_rules() {
+    let positive_half = Document::default().with("int1", SearchValue::Int(9_007_199_254_740_992));
+    let negative_half = Document::default().with("int1", SearchValue::Int(-9_007_199_254_740_992));
+    let below_max = Document::default().with("int1", SearchValue::Int(i64::MAX - 2));
+    let near_max = Document::default().with("int1", SearchValue::Int(i64::MAX - 1));
+    let max = Document::default().with("int1", SearchValue::Int(i64::MAX));
+
+    for query in [
+        "int1 = '9007199254740992.5'",
+        "int1 IN ('9007199254740992.5')",
+    ] {
+        assert!(evaluate(&check(query), &positive_half), "{query}");
+    }
+    assert!(evaluate(
+        &check("int1 = '-9007199254740992.5'"),
+        &negative_half
+    ));
+    assert!(evaluate(
+        &check("int1 >= '9223372036854775806.5'"),
+        &near_max
+    ));
+    assert!(evaluate(&check("int1 >= '9223372036854775806.5'"), &max));
+    assert!(!evaluate(
+        &check("int1 >= '9223372036854775806.5'"),
+        &below_max
+    ));
+    assert!(evaluate(
+        &check("int1 < '9223372036854775806.5'"),
+        &below_max
+    ));
+    assert!(!evaluate(
+        &check("int1 < '9223372036854775806.5'"),
+        &near_max
+    ));
+    let between = check("int1 BETWEEN '9223372036854775806.5' AND '9223372036854775807'");
+    assert!(evaluate(&between, &near_max));
+    assert!(evaluate(&between, &max));
+    assert!(!evaluate(&between, &below_max));
+    assert!(matches!(
+        check("int1 >= '9223372036854775806.5'").expression(),
+        Expression::Predicate(predicate)
+            if predicate.operator() == Operator::GreaterEqual
+                && matches!(predicate.literals(), [Literal::Int(value)] if *value == i64::MAX - 1)
+    ));
+    assert!(matches!(
+        check("int1 < '9223372036854775806.5'").expression(),
+        Expression::Predicate(predicate)
+            if predicate.operator() == Operator::LessEqual
+                && matches!(predicate.literals(), [Literal::Int(value)] if *value == i64::MAX - 2)
+    ));
+}
+
+#[test]
+fn quoted_int_rejects_invalid_and_out_of_range_values() {
+    for value in [
+        "0x1p2", "Inf", "NaN", "1_0", " 7", "7 ", "7d", "7f", "1e", ".", "",
+    ] {
+        let query = format!("int1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(
+            error.message.contains("invalid INT literal"),
+            "{query}: {error}"
+        );
+    }
+    for value in [
+        "9223372036854775808",
+        "-9223372036854775809",
+        "9.223372036854775808e18",
+        "1e1000",
+    ] {
+        let query = format!("int1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(error.message.contains("out of range"), "{query}: {error}");
+    }
+    for query in [
+        format!("int1 = '{}'", "9".repeat(10_000)),
+        "int1 >= '1e400'".to_owned(),
+        "int1 < '9223372036854775808.5'".to_owned(),
+    ] {
+        let started = std::time::Instant::now();
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(error.message.contains("out of range"), "{error}");
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "literal parsing was too slow"
+        );
+    }
+}
+
+#[test]
+fn quoted_hex_double_literals_round_to_nearest_f64() {
+    let quarter = Document::default().with("double1", SearchValue::Double(0.25));
+    let negative_three = Document::default().with("double1", SearchValue::Double(-3.0));
+    assert!(evaluate(&check("double1 = '0x1p-2'"), &quarter));
+    assert!(evaluate(&check("double1 = '0x.8P-1'"), &quarter));
+    assert!(evaluate(&check("double1 = '-0X1.8p1'"), &negative_three));
+    for (value, expected_bits) in [
+        ("0x1.00000000000008p0", 1.0_f64.to_bits()),
+        ("0x1.00000000000008001p0", 1.0_f64.to_bits() + 1),
+        ("0x1p-1075", 0.0_f64.to_bits()),
+        ("0x1.0000000000001p-1075", f64::from_bits(1).to_bits()),
+        ("0x1.fffffffffffffp1023", f64::MAX.to_bits()),
+    ] {
+        let query = check(&format!("double1 = '{value}'"));
+        let Expression::Predicate(predicate) = query.expression() else {
+            panic!("hex DOUBLE must remain a predicate");
+        };
+        assert!(
+            matches!(predicate.literals(), [Literal::Double(number)] if number.to_bits() == expected_bits),
+            "{value}"
+        );
+    }
+    for value in ["0x1p1024", "0x1.fffffffffffff8p1023"] {
+        let query = format!("double1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(error.message.contains("out of range"), "{query}: {error}");
+    }
+    for value in [
+        "0x1", "0x1p", "0x1p-", "0x.p1", "0x1p1f", "Inf", "Infinity", "NaN", "1_0", " 1", "1 ",
+        "1d", "1f",
+    ] {
+        let query = format!("double1 = '{value}'");
+        let error = parse_and_check(&query, &registry()).expect_err(&query);
+        assert!(
+            error.message.contains("invalid DOUBLE literal"),
+            "{query}: {error}"
+        );
     }
 }
 
@@ -305,6 +545,7 @@ fn repository_query_corpus_parses_and_type_checks() {
         "WorkflowId = 'a' AND ExecutionStatus != \"ContinuedAsNew\"",         // Server integration.
         "WorkflowId = 'a' AND ExecutionStatus = \"ContinuedAsNew\"",          // Server integration.
         "WorkflowId = 'a' OR WorkflowId = 'b'",                               // Server integration.
+        "CustomDatetimeField='2026-07-03T00:00:00Z' AND CustomDoubleField='0.01'", // Server persistence integration.
         "",
         "   ", // Empty SDK and server searches.
     ] {

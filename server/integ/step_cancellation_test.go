@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/superdurable/dex/config"
 	"github.com/superdurable/dex/gen/dexpb"
 	"github.com/superdurable/dex/integ/workflow/step_cancellation"
 	"github.com/superdurable/dex/service"
@@ -40,6 +41,8 @@ func TestQueuedStepCancellationAcrossContinueAsNewTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C3: server-zd never continues a run as new.
+	requireGoServerSetting(t, "Continue-As-New")
 	testQueuedStepCancellationAcrossContinueAsNew(t, service.BackendTypeTemporal)
 }
 
@@ -68,6 +71,8 @@ func TestLocalTimeoutFallbackCancellationTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C2: server-zd ASYNC Steps have no local phase to fall back from.
+	requireGoServerSetting(t, "ASYNC local phase")
 	testLocalTimeoutFallbackCancellation(t, service.BackendTypeTemporal)
 }
 
@@ -101,8 +106,15 @@ func TestRpcStepCancellationCadence(t *testing.T) {
 
 func testStepCancellation(t *testing.T, backendType service.BackendType) {
 	handler := step_cancellation.NewHandler()
+	testConfig := DexServiceTestConfig{BackendType: backendType}
+	if isServerZDBinaryMode() {
+		// The harness lowers the Go Server's 10s minimum heartbeat timeout; server-zd keeps 10s.
+		handler = step_cancellation.NewHandlerWithHeartbeatTimeout(10)
+		// C2: blocking Steps fill the adapter's sticky streams, and the ASYNC Winner gets the regular sticky wait.
+		testConfig.Matching = &config.MatchingConfig{StickyWait: time.Second}
+	}
 	workerTarget := startWorker(t, handler)
-	runtime := startDexService(t, DexServiceTestConfig{BackendType: backendType})
+	runtime := startDexService(t, testConfig)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 

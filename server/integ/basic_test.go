@@ -141,6 +141,10 @@ func doTestBasicFlow(
 			},
 		},
 	}
+	if isServerZDBinaryMode() {
+		// C20: server-zd rejects Flow retry policies; this scenario never retries the Flow.
+		startRequest.FlowStartOptions.RetryPolicy = nil
+	}
 	startResponse, err := flowClient.StartFlow(ctx, startRequest)
 	require.NoError(t, err)
 	require.NotEmpty(t, startResponse.GetRunId())

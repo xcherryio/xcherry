@@ -134,6 +134,7 @@ impl ComponentConfigs {
             long_poll_default_wait: max_wait,
             long_poll_max_wait: max_wait,
             rpc_default_timeout: config.api.default_rpc_timeout,
+            max_worker_rpc_request_bytes: grpc_max_message_bytes,
             hydrate_value_references: config.values.hydrate_before_dispatch,
             run_settings,
             validation: validation.clone(),
@@ -144,6 +145,10 @@ impl ComponentConfigs {
             max_worker_request_bytes: grpc_max_message_bytes,
             default_max_value_bytes: max_value_bytes,
             hydrate_before_dispatch: config.values.hydrate_before_dispatch,
+            max_blocking_state_reads: to_usize(
+                "limits.maxBlockingStateReads",
+                u64::from(config.limits.max_blocking_state_reads),
+            )?,
             ..EffectsConfig::default()
         };
         let matching = MatchingConfig {

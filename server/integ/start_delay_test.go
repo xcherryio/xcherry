@@ -26,6 +26,8 @@ func TestStartDelayTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C8: server-zd rejects a Flow start delay.
+	requireGoServerSetting(t, "Flow start delay")
 	doTestStartDelay(t, service.BackendTypeTemporal, nil)
 }
 

@@ -18,7 +18,10 @@ use thiserror::Error;
 use tokio_postgres::Transaction;
 use tokio_postgres::types::{ToSql, Type};
 
-use super::super::search_backend::{ParadeDbSearchBackend, is_connection_error};
+use super::super::search_backend::{
+    DATABASE_OPERATION_TIMEOUT, ParadeDbSearchBackend, database_error_message,
+    is_transient_database_error,
+};
 use super::super::{SearchRow, SqlStatement, upsert_statement};
 use super::changes::{SearchDocumentChange, decode_search_index_key};
 use crate::SearchError;
@@ -83,10 +86,21 @@ pub enum ProjectionError {
         offered: LogPosition,
     },
     /// Postgres could not complete a projection operation.
-    #[error("{operation} ParadeDB projection: {source}")]
+    #[error("{operation} ParadeDB projection: {}", database_error_message(source))]
     Database {
         /// Failed operation.
         operation: &'static str,
+        /// Database failure.
+        #[source]
+        source: tokio_postgres::Error,
+    },
+    /// Postgres rejected one committed run's upsert.
+    #[error("upsert run {run_id} in partition {} into ParadeDB projection: {}", partition_id.0, database_error_message(source))]
+    RowDatabase {
+        /// Partition containing the run.
+        partition_id: PartitionId,
+        /// Run whose upsert failed.
+        run_id: RunId,
         /// Database failure.
         #[source]
         source: tokio_postgres::Error,
@@ -97,6 +111,21 @@ pub enum ProjectionError {
     /// Reading a committed local-store row failed.
     #[error("read committed search state: {0}")]
     StateRead(#[from] StateReadError),
+}
+
+impl ProjectionError {
+    /// Returns whether reopening a failed connection can recover this projection operation.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Connection(SearchError::Unavailable(_)) => true,
+            Self::Database { source, .. } | Self::RowDatabase { source, .. } => {
+                is_transient_database_error(source)
+            }
+            Self::StateRead(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Projects committed partition documents through the search backend's shared connection pool.
@@ -136,18 +165,30 @@ impl ParadeDbProjector {
         let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
-            if slot.client.is_closed() {
+            if slot.is_disconnected() {
                 slot.reconnect(self.backend.configuration()).await?;
             }
-            let result = slot
-                .client
-                .query_typed_opt(
+            let result = tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
+                slot.client.query_typed_opt(
                     "SELECT applied_node_id, applied_incarnation, applied_seq, applied_position FROM dexzd_visibility_progress WHERE partition_id = $1::integer",
                     &[(&partition_number as &(dyn ToSql + Sync), Type::INT4)],
-                )
-                .await
-                .map_err(|source| database_error("read progress from", source))
-                .and_then(|row| row.map(|row| position_from_row(&row)).transpose().map(Option::flatten));
+                ),
+            )
+            .await;
+            let result = match result {
+                Ok(result) => result
+                    .map_err(|source| database_error("read progress from", source))
+                    .and_then(|row| {
+                        row.map(|row| position_from_row(&row))
+                            .transpose()
+                            .map(Option::flatten)
+                    }),
+                Err(_) => {
+                    slot.invalidate();
+                    Err(operation_timeout("read progress from"))
+                }
+            };
             if should_retry(&result, has_retried) {
                 has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
@@ -169,17 +210,27 @@ impl ParadeDbProjector {
         let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
-            if slot.client.is_closed() {
+            if slot.is_disconnected() {
                 slot.reconnect(self.backend.configuration()).await?;
             }
-            let result = apply_batch_transaction(
-                &mut slot.client,
-                partition_id,
-                previous_position,
-                applied_position,
-                changes,
+            let result = tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
+                apply_batch_transaction(
+                    &mut slot.client,
+                    partition_id,
+                    previous_position,
+                    applied_position,
+                    changes,
+                ),
             )
             .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => {
+                    slot.invalidate();
+                    Err(operation_timeout("apply batch to"))
+                }
+            };
             if should_retry(&result, has_retried) {
                 has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
@@ -201,16 +252,26 @@ impl ParadeDbProjector {
         let mut has_retried = false;
         loop {
             let mut slot = self.backend.lock_next_slot().await;
-            if slot.client.is_closed() {
+            if slot.is_disconnected() {
                 slot.reconnect(self.backend.configuration()).await?;
             }
-            let result = rebuild_transaction(
-                &mut slot.client,
-                partition_id,
-                applied_position,
-                committed_view.clone(),
+            let result = tokio::time::timeout(
+                DATABASE_OPERATION_TIMEOUT,
+                rebuild_transaction(
+                    &mut slot.client,
+                    partition_id,
+                    applied_position,
+                    committed_view.clone(),
+                ),
             )
             .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => {
+                    slot.invalidate();
+                    Err(operation_timeout("rebuild partition in"))
+                }
+            };
             if should_retry(&result, has_retried) {
                 has_retried = true;
                 slot.reconnect(self.backend.configuration()).await?;
@@ -411,7 +472,7 @@ async fn apply_change(
         } => match row_from_document(partition_id, *tenant_id, *run_id, encoded_document) {
             Ok(row) => {
                 let statement = upsert_statement(&row);
-                execute_statement(transaction, &statement).await?;
+                execute_statement(transaction, partition_id, *run_id, &statement).await?;
                 delete_skipped_document(transaction, *tenant_id, *run_id).await?;
             }
             Err(reason) => {
@@ -540,12 +601,18 @@ fn row_from_document(
 
 async fn execute_statement(
     transaction: &Transaction<'_>,
+    partition_id: PartitionId,
+    run_id: RunId,
     statement: &SqlStatement,
 ) -> Result<(), ProjectionError> {
     transaction
         .execute_typed(&statement.sql, &statement.typed_parameter_refs())
         .await
-        .map_err(|source| database_error("upsert run into", source))?;
+        .map_err(|source| ProjectionError::RowDatabase {
+            partition_id,
+            run_id,
+            source,
+        })?;
     Ok(())
 }
 
@@ -647,9 +714,15 @@ fn database_error(operation: &'static str, source: tokio_postgres::Error) -> Pro
     ProjectionError::Database { operation, source }
 }
 
+fn operation_timeout(operation: &'static str) -> ProjectionError {
+    ProjectionError::Connection(SearchError::Unavailable(format!(
+        "{operation} ParadeDB projection timed out after {DATABASE_OPERATION_TIMEOUT:?}"
+    )))
+}
+
 fn should_retry(result: &Result<impl Sized, ProjectionError>, has_retried: bool) -> bool {
     !has_retried
-        && matches!(result, Err(ProjectionError::Database { source, .. }) if is_connection_error(source))
+        && matches!(result, Err(ProjectionError::Database { source, .. } | ProjectionError::RowDatabase { source, .. }) if is_transient_database_error(source))
 }
 
 #[cfg(test)]
