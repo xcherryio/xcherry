@@ -1301,3 +1301,16 @@ fn a_flow_without_a_start_step_type_starts_without_any_step() {
     assert_eq!(harness.run_record().status, FlowStatus::Running as i32);
     harness.set_attribute("status", string_value("ready"), "set-1");
 }
+
+#[test]
+fn an_oversized_input_without_a_start_step_type_is_rejected() {
+    let mut harness = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.start_step_type = String::new();
+    request.step_input = Some(string_value(&"i".repeat(17 << 20)));
+
+    let outcome = harness.start(request);
+
+    assert!(is_error(&outcome.reply, 3), "{:?}", outcome.reply);
+    assert!(outcome.writes.is_empty());
+}
