@@ -50,6 +50,30 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ulid = "1"
 
+[profile.dev.package.block-buffer]
+opt-level = 3
+debug = false
+
+[profile.dev.package.crypto-common]
+opt-level = 3
+debug = false
+
+[profile.dev.package.digest]
+opt-level = 3
+debug = false
+
+[profile.dev.package.hmac]
+opt-level = 3
+debug = false
+
+[profile.dev.package.s3mock-server]
+opt-level = 3
+debug = false
+
+[profile.dev.package.sha2]
+opt-level = 3
+debug = false
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unreachable_pub = "warn"

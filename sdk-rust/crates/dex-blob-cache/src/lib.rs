@@ -20,8 +20,9 @@ mod format;
 mod policy;
 mod store;
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 pub use config::BlobCacheConfig;
 use config::validate_blob_id;
@@ -34,8 +35,9 @@ use store::LocalFileStore;
 /// Stores immutable Dex blob payloads in a bounded local directory.
 ///
 /// A cache is thread-safe. Reads and writes may run concurrently, while deletion and close
-/// coordinate with in-flight operations. Payloads survive process restarts; [`BlobCache::open`]
-/// recovers valid committed entries and removes interrupted writes.
+/// coordinate with in-flight operations. [`BlobCache::open`] recovers valid committed entries
+/// after a process restart and removes interrupted writes. Writes are not synchronized to disk,
+/// so a crash may leave a missing or corrupt entry that callers must fetch again.
 ///
 /// # Examples
 ///
@@ -55,6 +57,8 @@ pub struct BlobCache {
     policy: RwLock<Option<PolicyCache>>,
     lifecycle: RwLock<()>,
     commit: Mutex<()>,
+    pending: Mutex<HashSet<String>>,
+    pending_drained: Condvar,
     callback: DiskPolicyCallback,
     closed: AtomicBool,
 }
@@ -62,6 +66,23 @@ pub struct BlobCache {
 enum ExistingEntry {
     Missing,
     Reused,
+}
+
+struct PendingPutGuard<'a> {
+    cache: &'a BlobCache,
+    blob_id: String,
+}
+
+impl Drop for PendingPutGuard<'_> {
+    fn drop(&mut self) {
+        let mut pending = self
+            .cache
+            .pending
+            .lock()
+            .expect("pending put lock is poisoned");
+        pending.remove(&self.blob_id);
+        self.cache.pending_drained.notify_all();
+    }
 }
 
 impl BlobCache {
@@ -85,6 +106,8 @@ impl BlobCache {
             policy: RwLock::new(Some(policy)),
             lifecycle: RwLock::new(()),
             commit: Mutex::new(()),
+            pending: Mutex::new(HashSet::new()),
+            pending_drained: Condvar::new(),
             callback,
             closed: AtomicBool::new(false),
         };
@@ -155,43 +178,69 @@ impl BlobCache {
             .read()
             .expect("blob cache lifecycle lock is poisoned");
         self.require_open()?;
-        let _commit = self
-            .commit
-            .lock()
-            .expect("blob cache commit lock is poisoned");
-        self.callback.retry_cleanup()?;
-
         let metadata = calculate_metadata(blob_id, payload, self.store.path_for(blob_id))?;
         if metadata.size > self.config.max_bytes() {
             return Ok(false);
         }
-        if matches!(
-            self.reuse_existing(&metadata, payload)?,
-            ExistingEntry::Reused
-        ) {
-            return Ok(true);
-        }
+        let _pending = self.reserve_put(blob_id);
+        let entry = {
+            let _commit = self
+                .commit
+                .lock()
+                .expect("blob cache commit lock is poisoned");
+            self.callback.retry_cleanup()?;
+            if matches!(
+                self.reuse_existing(&metadata, payload)?,
+                ExistingEntry::Reused
+            ) {
+                return Ok(true);
+            }
 
-        let entry = Arc::new(DiskEntry::pending(metadata));
-        self.callback.reset_error();
-        let inserted = self.with_policy(|policy| {
-            Ok(policy.insert(blob_id.to_owned(), Arc::clone(&entry), entry.metadata.size))
-        })?;
-        if !inserted {
-            entry.begin_eviction();
-            return Ok(false);
-        }
-        self.wait_for_policy()?;
-        if let Some(error) = self.callback.take_error() {
-            self.remove_candidate(&entry)?;
-            return Err(BlobCacheError::Reconciliation(error));
-        }
+            let entry = Arc::new(DiskEntry::pending(metadata));
+            self.callback.reset_error();
+            let inserted = self.with_policy(|policy| {
+                Ok(policy.insert(blob_id.to_owned(), Arc::clone(&entry), entry.metadata.size))
+            })?;
+            if !inserted {
+                entry.begin_eviction();
+                return Ok(false);
+            }
+            self.wait_for_policy()?;
+            if let Some(error) = self.callback.take_error() {
+                self.remove_candidate(&entry)?;
+                return Err(BlobCacheError::Reconciliation(error));
+            }
+            if !self.policy_contains(blob_id, &entry)? {
+                entry.begin_eviction();
+                return Ok(false);
+            }
+            entry
+        };
+
+        let staged = self.store.stage(&entry.metadata, payload);
+        let _commit = self
+            .commit
+            .lock()
+            .expect("blob cache commit lock is poisoned");
+        let temp_path = match staged {
+            Ok(path) => path,
+            Err(failure) => {
+                if let Some(path) = failure.orphan_path {
+                    self.callback.add_cleanup_path(&path);
+                }
+                self.remove_candidate(&entry)?;
+                return Err(failure.error);
+            }
+        };
         if !self.policy_contains(blob_id, &entry)? {
             entry.begin_eviction();
+            if let Err(error) = self.store.remove(&temp_path) {
+                self.callback.add_cleanup_path(&temp_path);
+                return Err(error);
+            }
             return Ok(false);
         }
-
-        if let Err(failure) = self.store.commit(&entry.metadata, payload) {
+        if let Err(failure) = self.store.publish(&entry.metadata, &temp_path) {
             if let Some(path) = failure.orphan_path {
                 self.callback.add_cleanup_path(&path);
             }
@@ -204,6 +253,21 @@ impl BlobCache {
             ));
         }
         Ok(true)
+    }
+
+    fn reserve_put(&self, blob_id: &str) -> PendingPutGuard<'_> {
+        let mut pending = self.pending.lock().expect("pending put lock is poisoned");
+        while pending.contains(blob_id) {
+            pending = self
+                .pending_drained
+                .wait(pending)
+                .expect("pending put lock is poisoned");
+        }
+        pending.insert(blob_id.to_owned());
+        PendingPutGuard {
+            cache: self,
+            blob_id: blob_id.to_owned(),
+        }
     }
 
     /// Deletes one blob if present.
@@ -500,5 +564,62 @@ impl BlobCache {
 impl Drop for BlobCache {
     fn drop(&mut self) {
         self.callback.set_closing();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn distinct_put_progresses_during_blocked_write() {
+        let directory = tempfile::tempdir().expect("cache directory");
+        let mut cache = BlobCache::open(
+            BlobCacheConfig::new(directory.path(), 1 << 20, 0).expect("cache configuration"),
+        )
+        .expect("open cache");
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started_sender, started_receiver) = mpsc::channel();
+        let release_for_hook = Arc::clone(&release);
+        cache.store.write_hook = Some(Arc::new(move |blob_id| {
+            if blob_id == "first" {
+                started_sender.send(()).expect("report blocked write");
+                let (lock, released) = &*release_for_hook;
+                let mut is_released = lock.lock().expect("release lock");
+                while !*is_released {
+                    is_released = released.wait(is_released).expect("release lock");
+                }
+            }
+        }));
+        let cache = Arc::new(cache);
+        let first_cache = Arc::clone(&cache);
+        let first = thread::spawn(move || first_cache.put("first", b"payload"));
+        started_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first write reached stage");
+
+        let second_cache = Arc::clone(&cache);
+        let (second_sender, second_receiver) = mpsc::channel();
+        let second = thread::spawn(move || {
+            second_sender
+                .send(second_cache.put("second", b"payload"))
+                .expect("report second Put");
+        });
+        let second_result = second_receiver.recv_timeout(Duration::from_secs(2));
+        let (lock, released) = &*release;
+        *lock.lock().expect("release lock") = true;
+        released.notify_all();
+        assert!(
+            second_result
+                .expect("distinct Put progressed")
+                .expect("second Put")
+        );
+        assert!(first.join().expect("first Put thread").expect("first Put"));
+        second.join().expect("second Put thread");
+        cache.close().expect("close cache");
     }
 }
