@@ -2328,6 +2328,64 @@ fn an_oversized_input_without_a_start_step_type_is_rejected() {
     assert!(outcome.writes.is_empty());
 }
 
+#[test]
+fn force_fail_uses_the_string_close_input_as_the_message_and_keeps_no_result() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.complete_wait_for("ChargeStep-1", 1);
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+    let decision = StepDecision {
+        close_decision: Some(CloseDecision {
+            close_decision_type: CloseDecisionType::ForceFail as i32,
+            close_input: Some(string_value("a failing message")),
+            ..CloseDecision::default()
+        }),
+        ..StepDecision::default()
+    };
+
+    harness.complete_execute("ChargeStep-1", 1, decision);
+
+    let record = harness.run_record();
+    assert_eq!(record.status, FlowStatus::Failed as i32);
+    let close = record.close.expect("the run is closed");
+    assert_eq!(
+        close.error_type,
+        dexzd_protocol::dex::FlowErrorType::StepDecisionFailingFlow as i32
+    );
+    assert_eq!(close.error_message, "a failing message");
+    assert!(close.results.is_empty(), "ForceFail keeps no Flow result");
+}
+
+#[test]
+fn an_oversized_force_fail_message_fails_the_attempt_as_value_too_large() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.complete_wait_for("ChargeStep-1", 1);
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+    let decision = StepDecision {
+        close_decision: Some(CloseDecision {
+            close_decision_type: CloseDecisionType::ForceFail as i32,
+            close_input: Some(string_value(&"m".repeat(17 << 20))),
+            ..CloseDecision::default()
+        }),
+        ..StepDecision::default()
+    };
+
+    harness.complete_execute("ChargeStep-1", 1, decision);
+
+    let record = harness.run_record();
+    assert_eq!(record.status, FlowStatus::Failed as i32);
+    let close = record.close.expect("the run is closed");
+    assert_eq!(
+        close.error_type,
+        dexzd_protocol::dex::FlowErrorType::WorkerApiFail as i32,
+        "the oversized result fails the attempt, which fails the Flow"
+    );
+    assert!(close.error_message.len() < 1 << 20);
+}
+
 fn skip_wait_for_movement(step_type: &str) -> StepMovement {
     StepMovement {
         step_type: step_type.to_owned(),
