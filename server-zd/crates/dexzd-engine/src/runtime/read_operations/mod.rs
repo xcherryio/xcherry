@@ -220,7 +220,12 @@ impl FlowRuntimeRegistry {
         self.check_running()?;
         let flow = FlowAddress::new(tenant_id, request.flow_id.clone());
         let committed = self.inner.dependencies.committer.committed_view()?;
-        read_model_adapter::read_flow_state(committed.as_ref(), self.flow_context(&flow), &request)
+        read_model_adapter::read_flow_state(
+            committed.as_ref(),
+            self.flow_context(&flow),
+            &flow,
+            &request,
+        )
     }
 
     /// Returns a page of history events of a run through apply's read model.
@@ -235,6 +240,7 @@ impl FlowRuntimeRegistry {
         read_model_adapter::read_history_events(
             committed.as_ref(),
             self.flow_context(&flow),
+            &flow,
             &request,
         )
     }
