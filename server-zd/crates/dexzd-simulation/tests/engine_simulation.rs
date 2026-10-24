@@ -167,7 +167,7 @@ fn assert_covered(total: &EngineSimulationSummary) {
 fn one_seed_produces_the_same_event_trace_twice() {
     let config = EngineSimulationConfig {
         active_seconds: 60,
-        calm_tail_seconds: 30,
+        ..EngineSimulationConfig::default()
     };
     for seed in [FIRST_SEED, FIRST_SEED + 1, FIRST_SEED + 2] {
         let first = run_engine_seed(seed, &config).unwrap_or_else(|failure| panic!("{failure}"));
