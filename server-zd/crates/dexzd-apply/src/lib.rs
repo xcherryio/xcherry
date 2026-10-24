@@ -18,11 +18,12 @@ mod apply_context;
 mod apply_outcome;
 mod command_handlers;
 mod cross_flow;
+mod history;
 mod projections;
 pub mod read_model;
 mod state_access;
 mod steps;
-mod values;
+pub mod values;
 
 pub use apply_context::{ApplyContext, BehaviorVersion};
 pub use apply_outcome::{ApplyEffect, ApplyError, ApplyOutcome, StateWrite, WaitableChange};

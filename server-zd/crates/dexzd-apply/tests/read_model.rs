@@ -190,6 +190,8 @@ impl Harness {
                 max_value_bytes: 16 << 20,
                 retention_after_close_micros: 7 * 24 * 3600 * 1_000_000,
                 request_dedup_capacity: 1000,
+                max_run_state_bytes: 1 << 30,
+                max_retained_superseded_bytes: 256 << 20,
                 ..RunSettings::default()
             }),
             resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
