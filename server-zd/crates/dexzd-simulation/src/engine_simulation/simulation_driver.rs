@@ -147,6 +147,7 @@ impl Simulation {
         let origin = Instant::now();
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
         let trace = Arc::new(EventTrace::new(origin));
+        let storage_observations = Arc::new(Mutex::new(StorageObservations::default()));
         let storage_clock: Arc<dyn WallClock> = Arc::new(SimulatedWallClock::new(origin, 0));
         let shared_store = Arc::new(InMemoryObjectStore::with_injector_and_clock(
             Arc::new(NoInjectedFaults),
@@ -165,9 +166,12 @@ impl Simulation {
             environment: ClusterEnvironment {
                 shared_store,
                 workers,
-                committed_log: Arc::new(CommittedLog::new(Arc::clone(&trace))),
+                committed_log: Arc::new(CommittedLog::new(
+                    Arc::clone(&trace),
+                    Arc::clone(&storage_observations),
+                )),
                 trace,
-                storage_observations: Arc::new(Mutex::new(StorageObservations::default())),
+                storage_observations,
                 retention_after_close,
                 origin,
             },
@@ -501,11 +505,13 @@ impl Simulation {
         ));
         self.store_copies.clear();
         self.environment
-            .committed_log
-            .mark_old_epoch(&old.process_label);
+            .storage_observations
+            .lock()
+            .expect("storage observation lock is not poisoned")
+            .old_epoch
+            .await_successor(&old.process_label);
         let deadline = Instant::now() + OLD_EPOCH_LIFETIME;
         self.old_epoch_processes.push((old, deadline));
-        self.summary.old_epoch_overlaps += 1;
         *self
             .summary
             .restarts_by_local_store
@@ -690,8 +696,10 @@ impl Simulation {
             summary
                 .snapshot_reads_during_start
                 .clone_from(&observations.snapshot_reads_during_start);
+            summary.old_epoch_overlaps = observations.old_epoch.overlaps;
+            summary.old_epoch_frames = observations.old_epoch.frames;
+            summary.old_epoch_write_attempts = name_counts(&observations.old_epoch.write_attempts);
         }
-        summary.old_epoch_frames = environment.committed_log.old_epoch_frames();
         summary.rejected_by_kind = name_counts(&environment.committed_log.rejected_by_kind());
         summary.worker_behaviors = environment
             .workers

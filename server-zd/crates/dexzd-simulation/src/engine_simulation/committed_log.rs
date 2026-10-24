@@ -22,6 +22,7 @@ use prost::Message;
 use crate::apply_checker::ApplyChecker;
 use crate::apply_simulation::command_kind;
 use crate::engine_simulation::event_trace::EventTrace;
+use crate::engine_simulation::simulated_object_store::StorageObservations;
 use crate::engine_simulation::workload::operation_marker;
 use crate::invariants::InvariantViolation;
 use crate::memory_state::MemoryFlowState;
@@ -56,21 +57,22 @@ struct CommittedLogState {
     /// Commands committed without writes, such as a second result of one attempt.
     rejected_by_kind: BTreeMap<&'static str, u64>,
     replayed_frames: u64,
-    /// Processes whose successor started while they still ran.
-    old_epoch_processes: BTreeSet<String>,
-    /// Frames old-epoch processes applied after their successor started.
-    old_epoch_frames: u64,
 }
 
 /// Collects applied frames from every node process and checks them against the shadow.
 pub(crate) struct CommittedLog {
     state: Mutex<CommittedLogState>,
     trace: Arc<EventTrace>,
+    /// Counts frames of old-epoch processes once their successor holds the lease.
+    storage_observations: Arc<Mutex<StorageObservations>>,
 }
 
 impl CommittedLog {
     /// The shadow places Flows with [`ApplyChecker::new`]'s partitioning, which the cluster copies.
-    pub(crate) fn new(trace: Arc<EventTrace>) -> Self {
+    pub(crate) fn new(
+        trace: Arc<EventTrace>,
+        storage_observations: Arc<Mutex<StorageObservations>>,
+    ) -> Self {
         Self {
             state: Mutex::new(CommittedLogState {
                 shadow: ApplyChecker::new(),
@@ -84,10 +86,9 @@ impl CommittedLog {
                 applied_by_kind: BTreeMap::new(),
                 rejected_by_kind: BTreeMap::new(),
                 replayed_frames: 0,
-                old_epoch_processes: BTreeSet::new(),
-                old_epoch_frames: 0,
             }),
             trace,
+            storage_observations,
         }
     }
 
@@ -140,17 +141,6 @@ impl CommittedLog {
 
     pub(crate) fn rejected_by_kind(&self) -> BTreeMap<&'static str, u64> {
         self.lock().rejected_by_kind.clone()
-    }
-
-    /// Records that `process_label` keeps running while its successor starts.
-    pub(crate) fn mark_old_epoch(&self, process_label: &str) {
-        self.lock()
-            .old_epoch_processes
-            .insert(process_label.to_owned());
-    }
-
-    pub(crate) fn old_epoch_frames(&self) -> u64 {
-        self.lock().old_epoch_frames
     }
 
     /// Returns a sink that records `process_label`'s frames and then passes them to `registry`.
@@ -213,9 +203,11 @@ impl CommittedLog {
             position.incarnation,
             position.seq,
         );
-        if state.old_epoch_processes.contains(process_label) {
-            state.old_epoch_frames += 1;
-        }
+        self.storage_observations
+            .lock()
+            .expect("storage observation lock is not poisoned")
+            .old_epoch
+            .record_frame(process_label);
         self.trace.record(&format!(
             "{process_label} applied frame p{} {}:{} with {} commands",
             partition.0,

@@ -8,7 +8,7 @@
 
 //! One shared in-memory object store with S3 semantics, seen by each node through a fault layer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,6 +95,58 @@ pub(crate) struct StorageObservations {
     pub(crate) deleted_objects: BTreeMap<&'static str, u64>,
     /// Snapshot manifest reads during a start, by how the start found its local store.
     pub(crate) snapshot_reads_during_start: BTreeMap<String, u64>,
+    pub(crate) old_epoch: OldEpochWindows,
+}
+
+/// Old-epoch processes before and after a successor's lease write took effect.
+#[derive(Debug, Default)]
+pub(crate) struct OldEpochWindows {
+    /// Old-epoch processes whose successor has not written the lease yet.
+    awaiting_successor: BTreeSet<String>,
+    /// Old-epoch processes that kept running after their successor's lease write took effect.
+    superseded: BTreeSet<String>,
+    /// Successor lease writes that took effect while an old-epoch process still ran.
+    pub(crate) overlaps: u64,
+    /// Writes superseded processes started, by key class.
+    pub(crate) write_attempts: BTreeMap<&'static str, u64>,
+    /// Frames superseded processes applied.
+    pub(crate) frames: u64,
+}
+
+impl OldEpochWindows {
+    /// Records that `process_label` keeps running while a successor starts.
+    pub(crate) fn await_successor(&mut self, process_label: &str) {
+        self.awaiting_successor.insert(process_label.to_owned());
+    }
+
+    /// Records a lease write of `writer` that took effect; returns the processes it superseded.
+    fn record_lease_written(&mut self, writer: &str) -> Vec<String> {
+        let superseded: Vec<String> = self
+            .awaiting_successor
+            .iter()
+            .filter(|process_label| *process_label != writer)
+            .cloned()
+            .collect();
+        for process_label in &superseded {
+            self.awaiting_successor.remove(process_label);
+            self.superseded.insert(process_label.clone());
+            self.overlaps += 1;
+        }
+        superseded
+    }
+
+    fn record_write_attempt(&mut self, process_label: &str, key_class: &'static str) {
+        if self.superseded.contains(process_label) {
+            *self.write_attempts.entry(key_class).or_default() += 1;
+        }
+    }
+
+    /// Counts a frame that `process_label` applied, if its successor already holds the lease.
+    pub(crate) fn record_frame(&mut self, process_label: &str) {
+        if self.superseded.contains(process_label) {
+            self.frames += 1;
+        }
+    }
 }
 
 /// One node process's view of the shared store; [`Self::cut_off`] makes its calls hang like a
@@ -262,6 +314,12 @@ impl NodeObjectStore {
         if self.is_cut_off() {
             return std::future::pending().await;
         }
+        let process_label = &self.process_label;
+        self.observe(|observations| {
+            observations
+                .old_epoch
+                .record_write_attempt(process_label, key_class(key));
+        });
         let plan = self.plan_call(operation, key);
         self.run_write_with_plan(plan, operation, key, effect, is_written)
             .await
@@ -288,25 +346,26 @@ impl NodeObjectStore {
         if self.is_cut_off() {
             // The request is on the wire: it may still land after the process died.
             if plan.is_effect_applied {
-                let landed = effect().await;
+                let landed = self.perform_write(key, effect, is_written).await;
                 drop(landed);
             }
             return std::future::pending().await;
         }
         let Some(fault) = plan.fault else {
-            return effect().await;
+            return self.perform_write(key, effect, is_written).await;
         };
         match fault {
             InjectedFault::SlowResponse => {
                 self.observe_fault(fault, FaultEffect::Delayed);
-                effect().await
+                self.perform_write(key, effect, is_written).await
             }
             InjectedFault::Throttled | InjectedFault::ConditionalRequestConflict => {
                 self.observe_fault(fault, FaultEffect::FailedBeforeEffect);
                 Err(rejection_before_effect(operation, key, fault))
             }
             InjectedFault::ServerError | InjectedFault::Timeout => {
-                let is_applied = plan.is_effect_applied && is_written(&effect().await);
+                let is_applied = plan.is_effect_applied
+                    && is_written(&self.perform_write(key, effect, is_written).await);
                 let effect_kind = if is_applied {
                     FaultEffect::WrittenOutcomeUnknown
                 } else {
@@ -321,7 +380,7 @@ impl NodeObjectStore {
                 ))
             }
             InjectedFault::ResponseLost => {
-                let outcome = effect().await;
+                let outcome = self.perform_write(key, effect, is_written).await;
                 if !is_written(&outcome) {
                     return outcome;
                 }
@@ -334,6 +393,35 @@ impl NodeObjectStore {
                 ))
             }
         }
+    }
+
+    /// Performs a write on the shared store and records a lease write that took effect.
+    async fn perform_write<T, F, Fut>(
+        &self,
+        key: &str,
+        effect: F,
+        is_written: fn(&ObjectStoreResult<T>) -> bool,
+    ) -> ObjectStoreResult<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ObjectStoreResult<T>>,
+    {
+        let outcome = effect().await;
+        if key_class(key) == "lease" && is_written(&outcome) {
+            let mut superseded = Vec::new();
+            self.observe(|observations| {
+                superseded = observations
+                    .old_epoch
+                    .record_lease_written(&self.process_label);
+            });
+            for old_process in superseded {
+                self.trace.record(&format!(
+                    "{} holds the lease while {old_process} still runs",
+                    self.process_label
+                ));
+            }
+        }
+        outcome
     }
 }
 
@@ -557,25 +645,37 @@ mod tests {
 
     const KEY: &str = "log/node-a/0000000001/00000000000000000001";
 
-    /// Runs `test` on a paused current-thread runtime with a layer over an empty shared store.
-    fn with_layer(test: impl AsyncFnOnce(&NodeObjectStore, &InMemoryObjectStore)) {
+    fn paused_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .start_paused(true)
             .build()
             .expect("a current-thread runtime with paused time builds")
-            .block_on(async {
-                let shared = Arc::new(InMemoryObjectStore::new());
-                let layer = NodeObjectStore::new(
-                    Arc::clone(&shared),
-                    "p1".to_owned(),
-                    "first".to_owned(),
-                    0,
-                    Arc::new(EventTrace::new(tokio::time::Instant::now())),
-                    Arc::new(Mutex::new(StorageObservations::default())),
-                );
-                test(&layer, &shared).await;
-            });
+    }
+
+    fn layer_for(
+        process_label: &str,
+        shared: &Arc<InMemoryObjectStore>,
+        observations: &Arc<Mutex<StorageObservations>>,
+    ) -> NodeObjectStore {
+        NodeObjectStore::new(
+            Arc::clone(shared),
+            process_label.to_owned(),
+            "first".to_owned(),
+            0,
+            Arc::new(EventTrace::new(tokio::time::Instant::now())),
+            Arc::clone(observations),
+        )
+    }
+
+    /// Runs `test` on a paused current-thread runtime with a layer over an empty shared store.
+    fn with_layer(test: impl AsyncFnOnce(&NodeObjectStore, &InMemoryObjectStore)) {
+        paused_runtime().block_on(async {
+            let shared = Arc::new(InMemoryObjectStore::new());
+            let observations = Arc::new(Mutex::new(StorageObservations::default()));
+            let layer = layer_for("p1", &shared, &observations);
+            test(&layer, &shared).await;
+        });
     }
 
     fn plan(fault: InjectedFault, is_effect_applied: bool) -> CallPlan {
@@ -687,5 +787,64 @@ mod tests {
                 )]
             );
         });
+    }
+
+    #[test]
+    fn old_epoch_counts_start_when_the_successor_lease_write_takes_effect() {
+        paused_runtime().block_on(async {
+            let shared = Arc::new(InMemoryObjectStore::new());
+            let observations = Arc::new(Mutex::new(StorageObservations::default()));
+            let old = layer_for("p1", &shared, &observations);
+            let successor = layer_for("p2", &shared, &observations);
+            let old_epoch = |observations: &Mutex<StorageObservations>| {
+                let observations = observations
+                    .lock()
+                    .expect("storage observation lock is not poisoned");
+                let windows = &observations.old_epoch;
+                (
+                    windows.overlaps,
+                    windows.write_attempts.get("log").copied().unwrap_or(0),
+                    windows.frames,
+                )
+            };
+            observations
+                .lock()
+                .expect("storage observation lock is not poisoned")
+                .old_epoch
+                .await_successor("p1");
+            let early = old
+                .put(
+                    KEY,
+                    Bytes::from_static(b"early"),
+                    WriteCondition::CreateOnly,
+                )
+                .await;
+            assert!(matches!(early, Ok(WriteOutcome::Written { .. })));
+            record_frame(&observations, "p1");
+            assert_eq!(old_epoch(&observations), (0, 0, 0));
+
+            let lease = successor
+                .put(
+                    "lease/node-a",
+                    Bytes::from_static(b"p2"),
+                    WriteCondition::CreateOnly,
+                )
+                .await;
+            assert!(matches!(lease, Ok(WriteOutcome::Written { .. })));
+            let late = old
+                .put(KEY, Bytes::from_static(b"late"), WriteCondition::CreateOnly)
+                .await;
+            assert!(matches!(late, Ok(WriteOutcome::PreconditionFailed)));
+            record_frame(&observations, "p1");
+            assert_eq!(old_epoch(&observations), (1, 1, 1));
+        });
+    }
+
+    fn record_frame(observations: &Mutex<StorageObservations>, process_label: &str) {
+        observations
+            .lock()
+            .expect("storage observation lock is not poisoned")
+            .old_epoch
+            .record_frame(process_label);
     }
 }

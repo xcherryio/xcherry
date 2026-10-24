@@ -69,11 +69,12 @@ partition never applies a new frame below one it already applied.
 
 The fixed seed set also asserts that these checks had something to check. It requires every
 fault kind with each effect it can have on a call, such as a timed-out write that did or did
-not take effect. It requires every restart mode and Worker behavior, and crashes during recovery. It also requires
-412 races on log and lease objects, and frames that old-epoch processes applied after their
-successor started. Log cleanup deletions, snapshot restores during starts, and rejected
-duplicate results are required too. So are running attempts compared after the quiet crash,
-and live runs in the final state.
+not take effect. It requires every restart mode and Worker behavior, and crashes during
+recovery. It also requires 412 races on log and lease objects. An old-epoch window opens only
+when a successor's lease write takes effect; the seed set requires log and lease writes that
+old-epoch processes started, and frames they applied, inside such a window. Log cleanup
+deletions, snapshot restores during starts, and rejected duplicate results are required too.
+So are running attempts compared after the quiet crash, and live runs in the final state.
 
 ### Not covered yet
 

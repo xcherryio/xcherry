@@ -52,12 +52,15 @@ pub struct EngineSimulationSummary {
     pub trace_events: u64,
     /// Node process restarts, by what happened to the local store.
     pub restarts_by_local_store: BTreeMap<String, u64>,
-    /// Successors that took over while the old-epoch process still ran.
+    /// Successor lease writes that took effect while the old-epoch process still ran.
     pub old_epoch_overlaps: u64,
     /// Processes that crashed during recovery, before they served.
     pub crashes_during_start: u64,
-    /// Frames old-epoch processes applied after their successor started.
+    /// Frames old-epoch processes applied after their successor's lease write took effect.
     pub old_epoch_frames: u64,
+    /// Writes old-epoch processes started after their successor's lease write took effect, by
+    /// key class such as `log` or `lease`.
+    pub old_epoch_write_attempts: BTreeMap<String, u64>,
     /// Conditional writes object storage rejected, by key class such as `log` or `lease`.
     pub precondition_failed_puts: BTreeMap<String, u64>,
     /// Objects deleted, by key class; `log` objects come from log cleanup.
@@ -111,6 +114,10 @@ impl EngineSimulationSummary {
         self.old_epoch_overlaps += other.old_epoch_overlaps;
         self.crashes_during_start += other.crashes_during_start;
         self.old_epoch_frames += other.old_epoch_frames;
+        merge_counts(
+            &mut self.old_epoch_write_attempts,
+            &other.old_epoch_write_attempts,
+        );
         merge_counts(
             &mut self.precondition_failed_puts,
             &other.precondition_failed_puts,

@@ -136,6 +136,8 @@ fn assert_covered(total: &EngineSimulationSummary) {
         (&total.deleted_objects, "log"),
         (&total.snapshot_reads_during_start, "lost"),
         (&total.snapshot_reads_during_start, "takeover"),
+        (&total.old_epoch_write_attempts, "log"),
+        (&total.old_epoch_write_attempts, "lease"),
     ] {
         assert!(
             count(counts, name) > 0,
