@@ -104,6 +104,7 @@ pub(crate) fn locking_attempt_command(flow_id: &str, run_id: RunId, lock_key: &s
                 invocation: Some(locking_invocation(lock_key)),
                 attempt: 1,
                 task_id: vec![1; 16],
+                pull_routing: None,
             },
         )),
         ..FlowCommand::default()

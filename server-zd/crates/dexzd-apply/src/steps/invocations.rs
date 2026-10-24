@@ -11,7 +11,7 @@
 //! Locks are held only while an attempt runs. Waiting calls queue FIFO per key by the seq at
 //! which they became pending; apply re-checks what the owner proposed.
 
-use dexzd_protocol::dex::StepDurability;
+use dexzd_protocol::dex::{StepDurability, StepOptions};
 use dexzd_protocol::dexzd::v1::{
     LockWaiterRecord, StepExecutionRecord, StepInvocationKey, StepInvocationPhase,
     StepInvocationRecord, StepMethod,
@@ -203,14 +203,29 @@ pub(crate) fn start_attempt(
     let run_id = cursor.run_id();
     let run_attempt = cursor.attempt();
     let attempt = invocation.attempt;
+    let method_timeout_seconds =
+        configured_method_timeout_seconds(step.options.as_ref(), invocation.method);
     cursor.add_effect(ApplyEffect::InvocationStarted {
         run_id,
         run_attempt,
         invocation: key,
         attempt,
         task_id: task_id.to_vec(),
+        method_timeout_seconds,
     });
     Ok(())
+}
+
+/// Returns the configured timeout in seconds of `method`, or 0 when the Step options leave it
+/// to the default; [`ApplyEffect::InvocationStarted`] carries this value.
+pub(crate) fn configured_method_timeout_seconds(options: Option<&StepOptions>, method: i32) -> i32 {
+    options.map_or(0, |options| {
+        if method == StepMethod::WaitFor as i32 {
+            options.wait_for_timeout_seconds
+        } else {
+            options.execute_timeout_seconds
+        }
+    })
 }
 
 /// Ends the running or pending attempt of the Step's current method: releases its locks and

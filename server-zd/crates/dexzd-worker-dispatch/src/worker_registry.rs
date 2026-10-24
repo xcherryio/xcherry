@@ -68,9 +68,17 @@ pub struct DispatchRequest {
     pub dispatch_wait: Option<Duration>,
 }
 
-/// One ordered frame from the Worker or the terminal dispatch outcome.
+/// One ordered frame from the Worker, an assignment change, or the terminal dispatch outcome.
 #[derive(Debug)]
 pub enum DispatchEvent {
+    /// The task was sent to this Worker, which may still reject it before any output.
+    Assigned {
+        /// Assigned Worker process ID.
+        app_worker_id: String,
+    },
+    /// The assigned Worker rejected the task or disconnected before any output; matching
+    /// continues with another Worker.
+    Unassigned,
     /// A non-final heartbeat or stream write from the assigned Worker.
     Output(PollWorkerTaskFrame),
     /// The unique final outcome of the dispatch.
@@ -117,7 +125,8 @@ pub struct DispatchHandle {
 }
 
 impl DispatchHandle {
-    /// Returns the next Worker output or the single final outcome, then returns `None`.
+    /// Returns the next Worker output, assignment change, or the single final outcome, then
+    /// returns `None`.
     pub async fn next(&mut self) -> Option<DispatchEvent> {
         self.events.recv().await
     }
@@ -415,6 +424,16 @@ impl WorkerDispatch {
                     }
                     continue;
                 }
+                let assigned = DispatchEvent::Assigned {
+                    app_worker_id: worker.app_worker_id.clone(),
+                };
+                if let Some(outcome) = self
+                    .forward_event(assigned, request.deadline, events, cancel)
+                    .await
+                {
+                    self.cancel_assignment(&worker, task_id, &mut frames).await;
+                    return Some(outcome);
+                }
                 let attempt = self
                     .await_assignment(
                         &worker,
@@ -427,6 +446,13 @@ impl WorkerDispatch {
                         &mut frames,
                     )
                     .await;
+                if !matches!(attempt, AttemptOutcome::Final(_))
+                    && let Some(outcome) = self
+                        .forward_event(DispatchEvent::Unassigned, request.deadline, events, cancel)
+                        .await
+                {
+                    return Some(outcome);
+                }
                 match attempt {
                     AttemptOutcome::Final(outcome) => return Some(*outcome),
                     AttemptOutcome::Capacity => {
@@ -558,6 +584,41 @@ impl WorkerDispatch {
                     self.cancel_assignment(worker, task_id, frames).await;
                     return AttemptOutcome::Final(Box::new(DispatchOutcome::DeadlineExceeded));
                 },
+            }
+        }
+    }
+
+    /// Sends `event` to the dispatch handle, waiting for room in its channel.
+    ///
+    /// Returns `None` once sent, or the dispatch's final outcome when it is cancelled or its
+    /// deadline passes first.
+    async fn forward_event(
+        &self,
+        event: DispatchEvent,
+        deadline: SystemTime,
+        events: &mpsc::Sender<DispatchEvent>,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Option<DispatchOutcome> {
+        let deadline_wait = Duration::from_micros(
+            system_time_micros(deadline)
+                .saturating_sub(self.inner.clock.now_unix_micros())
+                .max(0) as u64,
+        );
+        let send = events.send(event);
+        tokio::pin!(send);
+        let deadline_sleep = tokio::time::sleep(deadline_wait);
+        tokio::pin!(deadline_sleep);
+        loop {
+            tokio::select! {
+                sent = &mut send => {
+                    return sent.is_err().then_some(DispatchOutcome::Cancelled);
+                },
+                changed = cancel.changed() => {
+                    if changed.is_err() || *cancel.borrow() {
+                        return Some(DispatchOutcome::Cancelled);
+                    }
+                },
+                () = &mut deadline_sleep => return Some(DispatchOutcome::DeadlineExceeded),
             }
         }
     }

@@ -34,7 +34,7 @@ use crate::history::replay_state::{TransactionReader, absorb_writes};
 use crate::history::reset_target::resolve_target;
 use crate::history::state_rebuild::rebuild_attempt_state;
 use crate::state_access::{FlowTransaction, read_flow_directory};
-use crate::steps::{arm_timer, disarm_timer};
+use crate::steps::{arm_timer, configured_method_timeout_seconds, disarm_timer};
 use crate::values::ValueIdAllocator;
 use crate::{ApplyEffect, ApplyError, BehaviorVersion, WaitableChange};
 
@@ -397,6 +397,10 @@ fn dispatch_restored_invocations(
                 invocation: key,
                 attempt: invocation.attempt,
                 task_id: invocation.task_id.clone(),
+                method_timeout_seconds: configured_method_timeout_seconds(
+                    step.options.as_ref(),
+                    invocation.method,
+                ),
             }),
             StepInvocationPhase::Backoff | StepInvocationPhase::Unspecified => {}
         }

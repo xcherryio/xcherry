@@ -98,6 +98,7 @@ pub(crate) fn start_attempt(rng: &mut ChaCha8Rng, call: &Call<'_>) -> Command {
         invocation: Some(call.key()),
         attempt: call.invocation.attempt,
         task_id: random_bytes(rng).to_vec(),
+        pull_routing: None,
     })
 }
 

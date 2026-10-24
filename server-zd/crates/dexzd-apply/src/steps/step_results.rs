@@ -121,6 +121,7 @@ pub(crate) fn apply_attempt_started(
     )?;
     if let Some(invocation) = step.invocation.as_mut() {
         invocation.snapshot = Some(snapshot);
+        invocation.pull_routing = command.pull_routing.clone();
     }
     cursor.rows.put_step_execution(transaction, &step);
     Ok(StepCommandOutcome::Applied(ok_reply()))

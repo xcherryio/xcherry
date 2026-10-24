@@ -184,9 +184,22 @@ async fn completed(handle: &mut dexzd_worker_dispatch::DispatchHandle) -> Dispat
             .expect("test operation succeeds")
         {
             DispatchEvent::Completed(outcome) => return outcome,
-            DispatchEvent::Output(_) => {}
+            DispatchEvent::Output(_)
+            | DispatchEvent::Assigned { .. }
+            | DispatchEvent::Unassigned => {}
         }
     }
+}
+
+async fn next_event(handle: &mut dexzd_worker_dispatch::DispatchHandle) -> DispatchEvent {
+    tokio::time::timeout(Duration::from_secs(3), handle.next())
+        .await
+        .expect("an event arrives")
+        .expect("the dispatch has another event")
+}
+
+fn is_assigned_to(event: &DispatchEvent, worker_id: &str) -> bool {
+    matches!(event, DispatchEvent::Assigned { app_worker_id } if app_worker_id == worker_id)
 }
 
 #[tokio::test]
@@ -301,6 +314,7 @@ async fn dispatch_relays_heartbeats_stream_writes_and_result_in_order() {
         .sender
         .send(result(&assigned))
         .expect("test operation succeeds");
+    assert!(is_assigned_to(&next_event(&mut handle).await, "worker"));
     assert!(matches!(
         handle.next().await,
         Some(DispatchEvent::Output(PollWorkerTaskFrame {
@@ -496,6 +510,10 @@ async fn disconnect_replays_before_output_and_fails_after_output() {
         .sender
         .send(heartbeat(&assigned))
         .expect("test operation succeeds");
+    assert!(is_assigned_to(
+        &next_event(&mut after_output).await,
+        "second"
+    ));
     assert!(matches!(
         after_output.next().await,
         Some(DispatchEvent::Output(_))
@@ -507,6 +525,40 @@ async fn disconnect_replays_before_output_and_fails_after_output() {
             reason: DispatchTaskErrorReason::WorkerDisconnected,
             ..
         }
+    ));
+}
+
+#[tokio::test]
+async fn assignment_events_follow_each_worker_that_receives_the_task_before_output() {
+    let dispatch = dispatch_with_config(MatchingConfig::default());
+    let server = start_server(dispatch.clone(), 0).await;
+    let mut first = register_worker(&server.channel, registration("Flow", "first")).await;
+    let mut handle = dispatch
+        .dispatch(request(0, "assignments"))
+        .expect("dispatch starts");
+    let first_task = task_id(&mut first).await;
+    assert!(is_assigned_to(&next_event(&mut handle).await, "first"));
+    let mut second = register_worker(&server.channel, registration("Flow", "second")).await;
+    first.send(poll_worker_task_request::Frame::Reject(
+        PollWorkerTaskReject {
+            task_id: first_task,
+            reason: PollWorkerTaskRejectReason::NoCapacity as i32,
+        },
+    ));
+    assert!(matches!(
+        next_event(&mut handle).await,
+        DispatchEvent::Unassigned
+    ));
+    let second_task = task_id(&mut second).await;
+    assert!(is_assigned_to(&next_event(&mut handle).await, "second"));
+    second
+        .sender
+        .send(result(&second_task))
+        .expect("result sends");
+    assert!(matches!(
+        next_event(&mut handle).await,
+        DispatchEvent::Completed(DispatchOutcome::WorkerResult { app_worker_id, .. })
+            if app_worker_id == "second"
     ));
 }
 
@@ -958,6 +1010,7 @@ async fn worker_frames_apply_backpressure_when_the_engine_stops_reading() {
             .expect("event exists")
         {
             DispatchEvent::Output(_) => outputs += 1,
+            DispatchEvent::Assigned { .. } | DispatchEvent::Unassigned => {}
             DispatchEvent::Completed(outcome) => panic!("unexpected terminal outcome {outcome:?}"),
         }
     }
@@ -1052,6 +1105,7 @@ async fn rejection_after_output_is_worker_disconnected() {
         .sender
         .send(heartbeat(&assigned))
         .expect("heartbeat sends");
+    assert!(is_assigned_to(&next_event(&mut handle).await, "worker"));
     assert!(matches!(
         handle.next().await,
         Some(DispatchEvent::Output(_))

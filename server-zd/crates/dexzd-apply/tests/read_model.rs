@@ -228,6 +228,15 @@ impl Harness {
     }
 
     fn start_attempt_for(&mut self, step_execution_id: &str, method: StepMethod) {
+        self.start_attempt_with_routing(step_execution_id, method, None);
+    }
+
+    fn start_attempt_with_routing(
+        &mut self,
+        step_execution_id: &str,
+        method: StepMethod,
+        pull_routing: Option<PullRouting>,
+    ) {
         self.apply(Command::StepAttemptStarted(StepAttemptStartedCommand {
             invocation: Some(StepInvocationKey {
                 step_execution_id: step_execution_id.to_owned(),
@@ -235,6 +244,7 @@ impl Harness {
             }),
             attempt: 1,
             task_id: vec![2; 16],
+            pull_routing,
         }));
     }
 
@@ -1573,6 +1583,127 @@ fn active_step_keeps_wait_for_routing_until_it_finishes() {
     assert!(step.wait_for_pull_routing.is_none());
 }
 
+fn dispatch_routing(sticky_app_worker_id: &str) -> PullRouting {
+    PullRouting {
+        sticky_app_worker_id: sticky_app_worker_id.to_owned(),
+        ..PullRouting::default()
+    }
+}
+
+fn served_routing(app_worker_id: &str) -> PullRouting {
+    PullRouting {
+        sticky_app_worker_id: String::new(),
+        served_by_app_worker_id: app_worker_id.to_owned(),
+        source: PullRoutingSource::FlowTypeQueue as i32,
+    }
+}
+
+#[test]
+fn running_attempts_report_their_dispatch_routing_until_a_result_replaces_it() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt_with_routing(
+        "ChargeStep-1",
+        StepMethod::WaitFor,
+        Some(dispatch_routing("")),
+    );
+    let state = get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    let step = &state.active_step_executions[0];
+    assert_eq!(step.wait_for_pull_routing, Some(dispatch_routing("")));
+    assert!(step.execute_pull_routing.is_none());
+
+    harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::WaitFor as i32,
+        }),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse::default(),
+        )),
+        app_worker_id: "worker-a".to_owned(),
+        pull_routing: Some(served_routing("worker-a")),
+        ..StepMethodCompletedCommand::default()
+    }));
+    let state = get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    let step = &state.active_step_executions[0];
+    assert_eq!(step.wait_for_pull_routing, Some(served_routing("worker-a")));
+    assert!(
+        step.execute_pull_routing.is_none(),
+        "Execute is not running"
+    );
+
+    harness.start_attempt_with_routing(
+        "ChargeStep-1",
+        StepMethod::Execute,
+        Some(dispatch_routing("worker-a")),
+    );
+    let state = get_flow_state(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    let step = &state.active_step_executions[0];
+    assert_eq!(step.wait_for_pull_routing, Some(served_routing("worker-a")));
+    assert_eq!(
+        step.execute_pull_routing,
+        Some(dispatch_routing("worker-a"))
+    );
+}
+
+#[test]
+fn a_result_rejected_by_apply_keeps_its_routing_on_the_attempt_failure() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    let unknown_reference = Value {
+        kind: Some(value::Kind::InternalBlobIdForStringValue(
+            "zd1|not-a-reference".to_owned(),
+        )),
+    };
+    harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
+        invocation: Some(StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::WaitFor as i32,
+        }),
+        attempt: 1,
+        response: Some(step_method_completed_command::Response::WaitFor(
+            InvokeWaitForMethodResponse {
+                upsert_attributes: vec![AttributeWrite {
+                    key: "report".to_owned(),
+                    value: Some(unknown_reference),
+                    ..AttributeWrite::default()
+                }],
+                ..InvokeWaitForMethodResponse::default()
+            },
+        )),
+        app_worker_id: "worker-a".to_owned(),
+        pull_routing: Some(served_routing("worker-a")),
+        ..StepMethodCompletedCommand::default()
+    }));
+    let events = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .unwrap()
+    .events;
+    let failure_routings: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event.payload.as_ref() {
+            Some(flow_history_event::Payload::StepWaitForFailed(failed)) => Some(
+                failed
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.failure.as_ref())
+                    .and_then(|failure| failure.pull_routing.clone()),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failure_routings, vec![Some(served_routing("worker-a"))]);
+}
+
 #[test]
 fn a_step_canceled_by_cancel_close_is_reported_as_completed() {
     let mut harness = Harness::new();
@@ -2341,6 +2472,7 @@ fn retried_method_contexts_keep_the_previous_failure_and_final_start() {
             invocation: Some(invocation_key(method)),
             attempt: 2,
             task_id: vec![3; 16],
+            pull_routing: None,
         })
     };
 
@@ -2572,6 +2704,7 @@ fn pending_retry_context_reports_the_last_started_attempt() {
                 invocation: Some(invocation),
                 attempt: 2,
                 task_id: vec![3; 16],
+                pull_routing: None,
             }));
         }
         let expected_started_at = if is_retry_running {

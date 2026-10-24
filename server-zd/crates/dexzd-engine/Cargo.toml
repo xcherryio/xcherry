@@ -20,6 +20,7 @@ dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
 dexzd-request-validation.workspace = true
 dexzd-storage.workspace = true
+dexzd-stream-store.workspace = true
 dexzd-worker-dispatch.workspace = true
 futures.workspace = true
 prost.workspace = true

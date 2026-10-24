@@ -332,6 +332,7 @@ impl Harness {
             invocation: Some(key(step_execution_id, method)),
             attempt,
             task_id: vec![attempt as u8; 16],
+            pull_routing: None,
         }));
         assert!(
             !outcome.writes.is_empty(),
@@ -565,6 +566,25 @@ fn started_effects(outcome: &ApplyOutcome) -> Vec<(String, u32, u32, Vec<u8>)> {
                 *attempt,
                 *run_attempt,
                 task_id.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn started_timeouts(outcome: &ApplyOutcome) -> Vec<(String, i32, i32)> {
+    outcome
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            ApplyEffect::InvocationStarted {
+                invocation,
+                method_timeout_seconds,
+                ..
+            } => Some((
+                invocation.step_execution_id.clone(),
+                invocation.method,
+                *method_timeout_seconds,
             )),
             _ => None,
         })
@@ -899,6 +919,40 @@ fn parallel_in_flight_steps_are_redispatched_with_their_snapshots_and_attempts()
     };
     let completed = harness.apply(Command::StepMethodCompleted(completion));
     assert!(is_ok(&completed.reply));
+}
+
+#[test]
+fn restored_running_attempts_carry_their_configured_method_timeouts() {
+    let mut harness = Harness::new();
+    let mut request = start_request();
+    request.step_options = Some(StepOptions {
+        wait_for_timeout_seconds: 7,
+        execute_timeout_seconds: 30,
+        ..StepOptions::default()
+    });
+    harness.start(request);
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_attribute("status", "waiting", "");
+    let wait_for_point = harness.history_record(harness.last_seq()).unwrap();
+    harness.complete_wait_for("ChargeStep-1");
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+    harness.set_attribute("status", "executing", "");
+    let execute_point = harness.history_record(harness.last_seq()).unwrap();
+    harness.complete_execute("ChargeStep-1", 1, force_complete());
+
+    let (_, outcome) = harness.travel_to(reset_to_time(execute_point.timestamp_micros));
+    assert_eq!(
+        started_timeouts(&outcome),
+        vec![("ChargeStep-1".to_owned(), StepMethod::Execute as i32, 30)]
+    );
+    let (_, outcome) = harness.travel_to(ResetFlowRequest {
+        run_attempt: 1,
+        ..reset_to_time(wait_for_point.timestamp_micros)
+    });
+    assert_eq!(
+        started_timeouts(&outcome),
+        vec![("ChargeStep-1".to_owned(), StepMethod::WaitFor as i32, 7)]
+    );
 }
 
 #[test]
