@@ -46,7 +46,7 @@ and target).
 ```bash
 # from examples/python, with Dex running
 DEX_FLOW_SERVICE_ADDRESS=127.0.0.1:8801 \
-  uv run --frozen pytest sync-python/tests/integ -v
+  uv run --frozen pytest sync-python/sync_tests/integ -v
 ```
 
 Or run the full e2e suite (`make e2eTests`), which includes these sync integ tests.

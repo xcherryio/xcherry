@@ -37,6 +37,19 @@ import java.util.Objects;
  *         .build();
  * client.startFlow(orderFlow, "order-123", input, options);
  * }</pre>
+ *
+ * <p>To retry one logical start safely, for example after a lost response, set a stable request
+ * ID and enable {@link Builder#ignoreAlreadyStarted(boolean)} together. Reuse the same values on
+ * every retry. A retry returns the existing run only when both are set and the request ID
+ * matches the request that started that run.
+ *
+ * <pre>{@code
+ * StartFlowOptions retrySafeOptions = StartFlowOptions.newBuilder()
+ *         .ignoreAlreadyStarted(true)
+ *         .requestId("start-order-" + orderId)
+ *         .build();
+ * client.startFlow(orderFlow, "order-" + orderId, input, retrySafeOptions);
+ * }</pre>
  */
 public final class StartFlowOptions {
     private final Duration timeout;
@@ -260,6 +273,12 @@ public final class StartFlowOptions {
         /**
          * Controls whether an already-started response is accepted.
          *
+         * <p>When enabled, a start rejected because the Flow ID already exists returns the
+         * existing run ID only when {@link #requestId(String)} matches the request ID that started
+         * that run. A different or SDK-generated request ID still throws
+         * {@link io.superdurable.dex.exceptions.FlowAlreadyStartedException}. See
+         * {@link StartFlowOptions} for an example that sets both options.
+         *
          * @param value {@code true} to ignore the already-started error
          * @return this builder
          */
@@ -270,6 +289,15 @@ public final class StartFlowOptions {
 
         /**
          * Sets an idempotency key for this start request.
+         *
+         * <p>A retried start returns the existing run only when
+         * {@link #ignoreAlreadyStarted(boolean)} is {@code true} and this request ID matches the
+         * request that started that run. Without that option, the retry throws
+         * {@link io.superdurable.dex.exceptions.FlowAlreadyStartedException} even when the first
+         * attempt created the Flow. The match applies only when the ID reuse policy rejects the
+         * start. A policy that permits another run starts a new run instead. Dex compares only
+         * request IDs, not input or other options, so never reuse a request ID for a different
+         * logical start. See {@link StartFlowOptions} for an example that sets both options.
          *
          * @param value the stable request ID, or {@code null} to generate a UUID
          * @return this builder

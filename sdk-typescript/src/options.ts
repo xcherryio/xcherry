@@ -227,6 +227,9 @@ export const InitialAttribute = Object.freeze({
 /**
  * Configures creation of a new Flow execution. All durations use milliseconds.
  *
+ * To retry one logical start safely, for example after a lost response, set a stable
+ * `requestId` and `ignoreAlreadyStarted: true` together. Reuse the same values on every retry.
+ *
  * @example
  * ```ts
  * const status = new Attribute("status", stringCodec);
@@ -236,6 +239,14 @@ export const InitialAttribute = Object.freeze({
  *   attributes: [InitialAttribute.of(status, "queued")],
  *   configOverride: { activeStepSearchMode: ActiveStepSearchMode.ALL },
  * };
+ * ```
+ *
+ * @example
+ * ```ts
+ * const runId = await client.startFlow(orderFlow, `order-${orderId}`, input, {
+ *   ignoreAlreadyStarted: true,
+ *   requestId: `start-order-${orderId}`,
+ * });
  * ```
  */
 export interface StartFlowOptions {
@@ -255,9 +266,24 @@ export interface StartFlowOptions {
   readonly attributes?: readonly InitialAttribute<any>[];
   /** Flow configuration applied over registered defaults. */
   readonly configOverride?: FlowConfig;
-  /** Returns the existing run instead of raising an already-started error. */
+  /**
+   * Returns the existing run instead of raising an already-started error.
+   *
+   * It applies only when `requestId` matches the request ID that started the existing run.
+   * A different or generated request ID still throws {@link FlowAlreadyStartedError}.
+   */
   readonly ignoreAlreadyStarted?: boolean;
-  /** Non-empty idempotency key; generates a UUID when omitted. */
+  /**
+   * Non-empty idempotency key; generates a UUID when omitted.
+   *
+   * A retried start returns the existing run only when `ignoreAlreadyStarted` is `true` and this
+   * request ID matches the request that started that run. Without that option, the retry throws
+   * {@link FlowAlreadyStartedError} even when the first attempt created the Flow. The match
+   * applies only when the ID reuse policy rejects the start. A policy that permits another run
+   * starts a new run instead. Dex compares only request IDs, not input or other options, so never
+   * reuse a request ID for a different logical start. See {@link StartFlowOptions} for an example
+   * that sets both options.
+   */
   readonly requestId?: string;
 }
 
