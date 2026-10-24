@@ -371,6 +371,11 @@ impl SwitchableFaults {
         self.arm_delay(ObjectStoreOperation::Get, key, false, delay);
     }
 
+    /// Delays the next read of a key under `prefix` by `delay`.
+    pub(crate) fn delay_next_get_under(&self, prefix: &str, delay: Duration) {
+        self.arm_delay(ObjectStoreOperation::Get, prefix, true, delay);
+    }
+
     /// Delays the next write of a key under `prefix` by `delay`.
     pub(crate) fn delay_next_put_under(&self, prefix: &str, delay: Duration) {
         self.arm_delay(ObjectStoreOperation::Put, prefix, true, delay);

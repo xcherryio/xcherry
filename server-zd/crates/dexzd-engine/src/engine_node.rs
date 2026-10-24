@@ -129,8 +129,16 @@ impl EngineNode {
             tasks.cancellation.clone(),
         ));
         // Every failure from here on must release the lease, or a successor waits for it to expire.
-        let mut applier_pool: Option<Arc<PartitionApplierPool>> = None;
+        let mut starting = StartingNode {
+            parts: Some(LeasedParts {
+                state: state.clone(),
+                tasks,
+                appliers: None,
+                lease,
+            }),
+        };
         let serving = async {
+            let parts = starting.parts_mut();
             let metadata = unleased_metadata
                 .read_under_lease(object_store.as_ref(), &config.node, epoch)
                 .await?;
@@ -179,7 +187,7 @@ impl EngineNode {
                 config.commit.applier_lanes,
                 config.commit.applier_queue_frames,
             ));
-            applier_pool = Some(appliers.clone());
+            parts.appliers = Some(appliers.clone());
             let replayed = LogReplay {
                 object_store: object_store.as_ref(),
                 clock: clock.as_ref(),
@@ -205,6 +213,7 @@ impl EngineNode {
                 committed_log_bytes: AtomicU64::new(0),
                 last_routed_seq: AtomicU64::new(replayed.epoch_start_seq),
             });
+            let tasks = &mut parts.tasks;
             tasks.spawn(run_log_proposer(
                 pipeline,
                 proposal_receiver,
@@ -277,27 +286,24 @@ impl EngineNode {
         }
         .await;
         match serving {
-            Ok((committer, snapshots)) => Ok(Self {
-                committer,
-                state,
-                appliers: applier_pool.expect("the applier pool starts before the node serves"),
-                snapshots,
-                lease,
-                tasks,
-            }),
-            Err(error) => {
-                let parts = LeasedParts {
+            Ok((committer, snapshots)) => {
+                let LeasedParts {
                     state,
                     tasks,
-                    appliers: applier_pool,
+                    appliers,
                     lease,
-                };
-                if let Err(release_error) = parts.stop_and_release_lease().await {
-                    tracing::error!(
-                        error = %release_error,
-                        "the node lease stays held after a failed start"
-                    );
-                }
+                } = starting.take_parts();
+                Ok(Self {
+                    committer,
+                    state,
+                    appliers: appliers.expect("the applier pool starts before the node serves"),
+                    snapshots,
+                    lease,
+                    tasks,
+                })
+            }
+            Err(error) => {
+                starting.release_after_failure().await;
                 Err(error)
             }
         }
@@ -395,6 +401,64 @@ impl LeasedParts {
             );
         }
         lease.shutdown().await
+    }
+}
+
+/// Owns the leased parts while [`EngineNode::start`] runs, so a failed or cancelled start releases
+/// the lease.
+struct StartingNode {
+    parts: Option<LeasedParts>,
+}
+
+impl StartingNode {
+    fn parts_mut(&mut self) -> &mut LeasedParts {
+        self.parts
+            .as_mut()
+            .expect("the parts stay until the start finishes")
+    }
+
+    /// Disarms the guard and returns the parts.
+    fn take_parts(&mut self) -> LeasedParts {
+        self.parts
+            .take()
+            .expect("the parts stay until the start finishes")
+    }
+
+    /// Stops the parts and releases the lease; the release continues if the caller is cancelled.
+    async fn release_after_failure(mut self) {
+        let release_task = tokio::spawn(release_after_unfinished_start(self.take_parts()));
+        if let Err(error) = release_task.await {
+            tracing::error!(%error, "the lease release task failed after an unfinished start");
+        }
+    }
+}
+
+impl Drop for StartingNode {
+    fn drop(&mut self) {
+        let Some(parts) = self.parts.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                // Detached on purpose: the release must outlive the cancelled start.
+                let release_task = runtime.spawn(release_after_unfinished_start(parts));
+                drop(release_task);
+            }
+            Err(_) => tracing::error!(
+                "no async runtime can release the node lease after a cancelled start; it stays \
+                 held until it expires"
+            ),
+        }
+    }
+}
+
+/// Stops the parts of a failed or cancelled start, releases the lease, and logs the outcome.
+async fn release_after_unfinished_start(parts: LeasedParts) {
+    match parts.stop_and_release_lease().await {
+        Ok(()) => tracing::info!("released the node lease after an unfinished start"),
+        Err(error) => {
+            tracing::error!(%error, "the node lease stays held after an unfinished start")
+        }
     }
 }
 

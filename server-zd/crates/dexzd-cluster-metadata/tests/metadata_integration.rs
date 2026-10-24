@@ -46,6 +46,9 @@ struct MemoryStore {
     unknown_next_release_before_write: AtomicBool,
     unknown_next_release_after_write: AtomicBool,
     reject_next_lease_release: AtomicBool,
+    reject_next_manifest_write: AtomicBool,
+    block_next_manifest_write: AtomicBool,
+    manifest_write_blocked: Notify,
     manifest_read_barrier: Mutex<Option<(Arc<Barrier>, usize)>>,
 }
 
@@ -77,6 +80,22 @@ impl ObjectStore for MemoryStore {
                 ObjectStoreErrorKind::Transient,
                 "injected lease release rejection",
             ));
+        }
+        if key == "manifest"
+            && self
+                .reject_next_manifest_write
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(ObjectStoreError::new(
+                ObjectStoreOperation::Put,
+                key,
+                ObjectStoreErrorKind::Transient,
+                "injected manifest write rejection",
+            ));
+        }
+        if key == "manifest" && self.block_next_manifest_write.swap(false, Ordering::SeqCst) {
+            self.manifest_write_blocked.notify_one();
+            return std::future::pending().await;
         }
         if is_lease_release
             && self
@@ -878,6 +897,86 @@ async fn a_rejected_release_is_reported_and_the_lease_stays_held() {
         acquire_lease(store, clock, &node(), &config).await,
         Err(MetadataError::LeaseHeld { .. })
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_epoch_update_releases_the_written_lease() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    store
+        .reject_next_manifest_write
+        .store(true, Ordering::SeqCst);
+    assert!(matches!(
+        acquire_lease(store.clone(), clock.clone(), &node(), &config).await,
+        Err(MetadataError::Store(_))
+    ));
+    let released = store.get("lease/node-a").await.unwrap().unwrap();
+    assert_eq!(
+        NodeLease::decode(released.bytes)
+            .unwrap()
+            .expires_at_unix_micros,
+        i64::MIN
+    );
+    let successor = acquire_lease(store, clock, &node(), &config).await.unwrap();
+    assert_eq!(successor.epoch(), 1);
+    successor.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_acquisition_releases_the_written_lease() {
+    let store = Arc::new(MemoryStore::default());
+    let clock = Arc::new(TestClock::default());
+    create_initial_manifest(store.as_ref(), clock.as_ref(), 2, &node())
+        .await
+        .unwrap();
+    let config = LeaseConfig {
+        fail_fast: true,
+        ..LeaseConfig::default()
+    };
+    store
+        .block_next_manifest_write
+        .store(true, Ordering::SeqCst);
+    let acquisition_store = Arc::clone(&store);
+    let acquisition_clock = Arc::clone(&clock);
+    let acquisition_config = config.clone();
+    let acquisition = tokio::spawn(async move {
+        acquire_lease(
+            acquisition_store,
+            acquisition_clock,
+            &node(),
+            &acquisition_config,
+        )
+        .await
+    });
+    store.manifest_write_blocked.notified().await;
+    acquisition.abort();
+    assert!(matches!(acquisition.await, Err(error) if error.is_cancelled()));
+    // Far below the ten-second lease, so only the release can free it.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let current = store.get("lease/node-a").await.unwrap().unwrap();
+            if NodeLease::decode(current.bytes)
+                .unwrap()
+                .expires_at_unix_micros
+                == i64::MIN
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the cancelled acquisition releases its lease");
+    let successor = acquire_lease(store, clock, &node(), &config).await.unwrap();
+    assert_eq!(successor.epoch(), 1);
+    successor.shutdown().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]

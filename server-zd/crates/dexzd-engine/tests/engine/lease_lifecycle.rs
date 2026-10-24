@@ -16,8 +16,56 @@ use prost::Message;
 use tokio::time::Instant;
 
 use crate::harness::TestCluster;
+use crate::standby_takeover::start_node;
 
+const RECOVERED_FLOW: &str = "recovered-flow";
 const LEASE_KEY: &str = "lease/node-a";
+const LOG_PREFIX: &str = "log/node-a/";
+
+#[tokio::test(start_paused = true)]
+async fn a_start_cancelled_during_recovery_releases_the_lease() {
+    let mut cluster = TestCluster::new();
+    let config = cluster.config(LocalStoreConfig::InMemory);
+    let first = cluster.start_with(&config).await.expect("node starts");
+    first.commit_prompt(RECOVERED_FLOW, 2).await;
+    first
+        .node
+        .shutdown()
+        .await
+        .expect("the node releases its lease");
+    // Only recovery reads the log, and it runs after the lease is taken.
+    cluster
+        .faults
+        .delay_next_get_under(LOG_PREFIX, Duration::from_secs(60));
+    let start = tokio::spawn(start_node(&cluster, config.clone()));
+    cluster.faults.wait_until_delayed_operation_entered().await;
+    assert!(
+        is_lease_held(&cluster).await,
+        "recovery runs under the lease"
+    );
+    start.abort();
+    assert!(matches!(start.await, Err(error) if error.is_cancelled()));
+    // Far below the ten-second lease, so only the release can free it.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while is_lease_held(&cluster).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the cancelled start releases its lease");
+    let mut successor_config = config;
+    successor_config.lease.fail_fast = true;
+    let successor = cluster
+        .start_with(&successor_config)
+        .await
+        .expect("a fail-fast successor takes the released lease");
+    assert_eq!(successor.committed_count(RECOVERED_FLOW).await, 2);
+    successor
+        .node
+        .shutdown()
+        .await
+        .expect("the successor releases its lease");
+}
 
 #[tokio::test(start_paused = true)]
 async fn a_rejected_release_fails_shutdown_and_the_lease_stays_held() {

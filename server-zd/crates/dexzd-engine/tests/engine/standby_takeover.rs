@@ -156,7 +156,7 @@ async fn take_over_after_log_cleanup(
 }
 
 /// Returns a node start that owns its inputs, so a task can run it while the test acts.
-fn start_node(
+pub(crate) fn start_node(
     cluster: &TestCluster,
     config: EngineNodeConfig,
 ) -> impl Future<Output = Result<TestNode, EngineStartError>> + Send + 'static {

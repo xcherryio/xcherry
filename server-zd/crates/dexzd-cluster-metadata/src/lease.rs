@@ -290,33 +290,25 @@ pub async fn acquire_lease(
             Err(error) => return Err(error.into()),
         };
         let valid_until = sent_at + config.duration;
-        if Instant::now() >= valid_until {
-            return Err(MetadataError::LeaseLost {
-                node_id: node.node_id.clone(),
-                detail: "acquisition completed after local lease deadline".to_owned(),
-            });
-        }
         let (status, mut receiver) = watch::channel(LeaseStatus::ValidUntil(valid_until));
-        let mut owner = LeaseOwner {
-            store,
-            clock,
-            key,
-            lease,
-            etag,
-            duration: config.duration,
-            last_request_sent: sent_at,
-            current_valid_until: valid_until,
-            status,
+        let mut pending = PendingLease {
+            owner: Some(LeaseOwner {
+                store,
+                clock,
+                key,
+                lease,
+                etag,
+                duration: config.duration,
+                last_request_sent: sent_at,
+                current_valid_until: valid_until,
+                status,
+            }),
         };
-        let epoch = bump_node_epoch(owner.store.as_ref(), owner.clock.as_ref(), node).await?;
-        if Instant::now() >= valid_until {
-            return Err(MetadataError::LeaseLost {
-                node_id: node.node_id.clone(),
-                detail: "epoch update completed after local lease deadline".to_owned(),
-            });
-        }
-        owner.lease.epoch = epoch;
-        owner.renew_before_deadline().await?;
+        let epoch = match pending.owner_mut().finish_acquisition(node).await {
+            Ok(epoch) => epoch,
+            Err(error) => return Err(pending.release_after(error).await),
+        };
+        let owner = pending.take_owner();
         drop(receiver.borrow_and_update());
         let (shutdown_sender, shutdown_receiver) = oneshot::channel();
         let renewal_task = tokio::spawn(async move { owner.run(shutdown_receiver).await });
@@ -327,6 +319,79 @@ pub async fn acquire_lease(
             renewal_task: Some(renewal_task),
             shutdown_sender: Some(shutdown_sender),
         });
+    }
+}
+
+/// A written lease still being acquired; dropping it releases the lease in the background.
+struct PendingLease {
+    owner: Option<LeaseOwner>,
+}
+
+impl PendingLease {
+    fn owner_mut(&mut self) -> &mut LeaseOwner {
+        self.owner
+            .as_mut()
+            .expect("the owner stays until the acquisition finishes")
+    }
+
+    /// Disarms the guard and returns the owner.
+    fn take_owner(&mut self) -> LeaseOwner {
+        self.owner
+            .take()
+            .expect("the owner stays until the acquisition finishes")
+    }
+
+    /// Releases the lease, then returns `error`. The release continues if the caller is cancelled.
+    async fn release_after(mut self, error: MetadataError) -> MetadataError {
+        let owner = self.take_owner();
+        let release_task = tokio::spawn(release_unfinished_acquisition(owner));
+        if let Err(join_error) = release_task.await {
+            tracing::error!(
+                error = %join_error,
+                "the node lease release task failed after an unfinished acquisition"
+            );
+        }
+        error
+    }
+}
+
+impl Drop for PendingLease {
+    fn drop(&mut self) {
+        let Some(owner) = self.owner.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                // Detached on purpose: the release must outlive the cancelled acquisition.
+                let release_task = runtime.spawn(release_unfinished_acquisition(owner));
+                drop(release_task);
+            }
+            Err(_) => tracing::error!(
+                node_id = %owner.lease.node_id,
+                "no async runtime can release the node lease; it stays held until it expires"
+            ),
+        }
+    }
+}
+
+/// Releases the lease of a failed or cancelled acquisition within the release budget.
+async fn release_unfinished_acquisition(owner: LeaseOwner) {
+    let node_id = owner.lease.node_id.clone();
+    match tokio::time::timeout(LeaseHandle::RELEASE_BUDGET, owner.release()).await {
+        Ok(Ok(())) => tracing::info!(
+            %node_id,
+            "released the node lease after an unfinished acquisition"
+        ),
+        Ok(Err(error)) => tracing::error!(
+            %node_id,
+            %error,
+            "the node lease stays held after an unfinished acquisition"
+        ),
+        Err(_) => tracing::error!(
+            %node_id,
+            budget_milliseconds = LeaseHandle::RELEASE_BUDGET.as_millis(),
+            "releasing the node lease after an unfinished acquisition timed out"
+        ),
     }
 }
 
@@ -351,6 +416,22 @@ impl LeaseOwner {
                 return self;
             }
         }
+    }
+
+    /// Raises the node epoch and renews once, both within the first lease period.
+    ///
+    /// Returns the raised epoch, or the error that ended the acquisition.
+    async fn finish_acquisition(&mut self, node: &NodeConfig) -> Result<u64, MetadataError> {
+        if Instant::now() >= self.current_valid_until {
+            return Err(self.lost("acquisition completed after local lease deadline"));
+        }
+        let epoch = bump_node_epoch(self.store.as_ref(), self.clock.as_ref(), node).await?;
+        if Instant::now() >= self.current_valid_until {
+            return Err(self.lost("epoch update completed after local lease deadline"));
+        }
+        self.lease.epoch = epoch;
+        self.renew_before_deadline().await?;
+        Ok(epoch)
     }
 
     /// Writes an expired copy of the lease.
