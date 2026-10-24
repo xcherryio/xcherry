@@ -8,10 +8,10 @@
 
 use dexzd_protocol::dex::RetryPolicy;
 
-const DEFAULT_INITIAL_INTERVAL_SECONDS: i64 = 1;
-const DEFAULT_BACKOFF_COEFFICIENT: f64 = 2.0;
-const DEFAULT_MAXIMUM_INTERVAL_SECONDS: i64 = 100;
-const DEFAULT_TOTAL_DURATION_SECONDS: i64 = 4 * 60 * 60;
+pub(crate) const DEFAULT_INITIAL_INTERVAL_SECONDS: i64 = 1;
+pub(crate) const DEFAULT_BACKOFF_COEFFICIENT: f64 = 2.0;
+pub(crate) const DEFAULT_MAXIMUM_INTERVAL_SECONDS: i64 = 100;
+pub(crate) const DEFAULT_TOTAL_DURATION_SECONDS: i64 = 4 * 60 * 60;
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// What happens after a failed attempt.
