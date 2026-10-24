@@ -379,7 +379,9 @@ type HealthInfo struct {
 //
 // StartFlow returns FlowAlreadyStartedError when flowID identifies an existing
 // Flow. It also returns validation, serialization, context, transport, or server
-// errors without transferring ownership of input.
+// errors without transferring ownership of input. When options set
+// AlreadyStarted.IgnoreError and a RequestID matching the existing run's start
+// request, StartFlow returns that run ID instead of FlowAlreadyStartedError.
 func (client *Client) StartFlow(
 	ctx context.Context,
 	flow Flow,
