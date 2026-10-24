@@ -34,6 +34,33 @@ const LEASE_DURATION: &str = "2s";
 const RESPONSE_BUDGET: Duration = Duration::from_secs(1);
 const HEALTH_SERVICE_NAMES: [&str; 3] = ["", "dex.FlowService", "dex.WorkerTaskService"];
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readiness_attempt_times_out_when_tcp_accepts_without_grpc() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the stalled listener binds");
+    let address = listener.local_addr().expect("the listener has an address");
+    let stalled = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("the connection is accepted");
+        std::future::pending::<()>().await;
+        drop(stream);
+    });
+    let readiness = tokio::time::timeout(
+        Duration::from_secs(3),
+        ServeProcess::readiness_channel(address),
+    )
+    .await
+    .expect("a stalled gRPC readiness call finishes within three seconds");
+    assert!(readiness.is_none());
+    stalled.abort();
+    assert!(
+        stalled
+            .await
+            .expect_err("the stalled server task is cancelled")
+            .is_cancelled()
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sigterm_stops_a_standby_waiting_for_a_live_holder() {
     let primary = S3Emulator::start(PRIMARY_BUCKET, SignatureVerification::Strict).await;
@@ -257,10 +284,13 @@ async fn waiting_standby_reports_not_serving_then_serves_after_takeover() {
     );
     let channel = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Ok(channel) = Channel::from_shared(format!("http://{second_address}"))
-                .expect("the standby address is a valid URI")
-                .connect()
-                .await
+            if let Ok(Ok(channel)) = tokio::time::timeout(
+                RESPONSE_BUDGET,
+                Channel::from_shared(format!("http://{second_address}"))
+                    .expect("the standby address is a valid URI")
+                    .connect(),
+            )
+            .await
             {
                 break channel;
             }
@@ -278,8 +308,10 @@ async fn waiting_standby_reports_not_serving_then_serves_after_takeover() {
         let mut health = HealthClient::new(channel.clone());
         let check = tokio::time::timeout(RESPONSE_BUDGET, health.check(request.clone()))
             .await
-            .expect("the standby health Check responds within one second")
-            .expect("the standby health Check succeeds");
+            .unwrap_or_else(|_| panic!("standby health Check timed out:\n{}", second.log()))
+            .unwrap_or_else(|error| {
+                panic!("standby health Check failed: {error}\n{}", second.log())
+            });
         assert_eq!(check.get_ref().status, ServingStatus::NotServing as i32);
         let mut watch = tokio::time::timeout(RESPONSE_BUDGET, health.watch(request))
             .await
@@ -328,14 +360,19 @@ async fn waiting_standby_reports_not_serving_then_serves_after_takeover() {
             .expect("the health Watch sends a status");
         assert_eq!(serving.status, ServingStatus::Serving as i32);
     }
-    FlowServiceClient::new(serving_channel)
-        .search_flows(dexzd_protocol::dex::SearchFlowsRequest {
-            query: "FlowType = 'StandbyHealthFlow'".to_owned(),
-            page_size: 10,
-            ..Default::default()
-        })
-        .await
-        .expect("the active FlowService serves requests");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        FlowServiceClient::new(serving_channel).search_flows(
+            dexzd_protocol::dex::SearchFlowsRequest {
+                query: "FlowType = 'StandbyHealthFlow'".to_owned(),
+                page_size: 10,
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("active FlowService timed out:\n{}", second.log()))
+    .unwrap_or_else(|error| panic!("active FlowService failed: {error}\n{}", second.log()));
     let second_status = second.terminate(SHUTDOWN_BUDGET).await;
     assert_eq!(second_status.code(), Some(0), "{}", second.log());
     primary.shutdown().await;

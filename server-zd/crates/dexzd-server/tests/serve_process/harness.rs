@@ -43,6 +43,7 @@ const SESSION_TOKEN: &str = "serve-test-session-token";
 /// Service names that readiness probes check.
 const READINESS_SERVICE_NAMES: [&str; 3] = ["", "dex.FlowService", "dex.WorkerTaskService"];
 const STARTUP_BUDGET: Duration = Duration::from_secs(30);
+const READINESS_CALL_BUDGET: Duration = Duration::from_secs(1);
 
 /// An s3mock server in this process with one bucket.
 pub(crate) struct S3Emulator {
@@ -355,19 +356,31 @@ impl ServeProcess {
     }
 
     async fn serving_channel(&self) -> Option<Channel> {
-        let channel = Channel::from_shared(format!("http://{}", self.address))
-            .expect("the server address is a valid URI")
-            .connect()
-            .await
-            .ok()?;
+        Self::readiness_channel(self.address).await
+    }
+
+    /// Checks gRPC readiness with a deadline on each network call.
+    pub(crate) async fn readiness_channel(address: SocketAddr) -> Option<Channel> {
+        let channel = tokio::time::timeout(
+            READINESS_CALL_BUDGET,
+            Channel::from_shared(format!("http://{address}"))
+                .expect("the server address is a valid URI")
+                .connect(),
+        )
+        .await
+        .ok()?
+        .ok()?;
         let mut health = HealthClient::new(channel.clone());
         for service in READINESS_SERVICE_NAMES {
-            let response = health
-                .check(HealthCheckRequest {
+            let response = tokio::time::timeout(
+                READINESS_CALL_BUDGET,
+                health.check(HealthCheckRequest {
                     service: service.to_owned(),
-                })
-                .await
-                .ok()?;
+                }),
+            )
+            .await
+            .ok()?
+            .ok()?;
             if response.get_ref().status != ServingStatus::Serving as i32 {
                 return None;
             }
