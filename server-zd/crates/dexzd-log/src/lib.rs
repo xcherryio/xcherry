@@ -9,6 +9,7 @@
 //! Command log batch format and the conditional-write commit protocol that makes server-zd writes durable in object storage.
 
 mod batch_codec;
+mod batch_read_ahead;
 mod commit_pipeline;
 mod stream_recovery;
 
@@ -16,7 +17,11 @@ pub use batch_codec::{
     BatchContent, BatchRecord, DecodedBatch, LogError, StreamIdentity, decode_batch, encode_batch,
     read_partition_records,
 };
+pub use batch_read_ahead::{LogReadAheadConfig, OrderedBatchReader};
 pub use commit_pipeline::{
     CommitPipeline, CommitPipelineConfig, CommittedBatch, ProposalFailure, ProposalTicket,
 };
-pub use stream_recovery::{RecoveredStream, recover_stream, recover_stream_from};
+pub use stream_recovery::{
+    RecoveredStream, StreamRecovery, StreamRecoveryInputs, StreamRecoveryResult,
+    StreamRecoveryStep, recover_stream, recover_stream_from,
+};

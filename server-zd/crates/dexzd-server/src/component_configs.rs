@@ -11,9 +11,10 @@ use std::time::Duration;
 use dexzd_api::FlowServiceConfig;
 use dexzd_cluster_metadata::NodeConfig;
 use dexzd_engine::{
-    CommitConfig, EffectsConfig, EngineNodeConfig, LocalStoreConfig, RuntimeConfig, SnapshotConfig,
-    default_run_settings,
+    CommitConfig, EffectsConfig, EngineNodeConfig, LocalStoreConfig, RecoveryConfig, RuntimeConfig,
+    SnapshotConfig, default_run_settings,
 };
+use dexzd_log::LogReadAheadConfig;
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::RocksDbStoreOptions;
 use dexzd_stream_store::StreamStoreConfig;
@@ -92,6 +93,7 @@ impl ComponentConfigs {
                         "localStorage.blockCacheBytes",
                         config.local_storage.block_cache_bytes,
                     )?,
+                    max_total_wal_bytes: config.local_storage.max_wal_bytes,
                 },
             },
             commit: CommitConfig {
@@ -112,6 +114,19 @@ impl ComponentConfigs {
                 )?,
                 deletion_delay: config.snapshot.log_deletion_delay,
                 ..SnapshotConfig::default()
+            },
+            recovery: RecoveryConfig {
+                log_read_ahead: LogReadAheadConfig {
+                    max_read_ahead_batches: to_usize(
+                        "recovery.readAheadBatches",
+                        u64::from(config.recovery.read_ahead_batches),
+                    )?,
+                    max_buffered_bytes: to_usize(
+                        "recovery.readAheadBytes",
+                        config.recovery.read_ahead_bytes,
+                    )?,
+                },
+                compact_after_replay_bytes: config.local_storage.compact_after_replay_bytes,
             },
         };
         let runtime = RuntimeConfig {

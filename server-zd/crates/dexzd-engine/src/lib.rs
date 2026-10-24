@@ -38,7 +38,7 @@ pub use long_poll::{
 };
 pub use recovery::{
     CommittedCommandSink, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
-    PartitionRuntimeRebuilder, RuntimeRebuildError,
+    PartitionRuntimeRebuilder, RecoveryConfig, RuntimeRebuildError,
 };
 pub use runtime::HardDeleteUploads as RuntimeHardDeleteUploads;
 pub use runtime::ReplayMismatch as SpeculativeOutcomeMismatch;

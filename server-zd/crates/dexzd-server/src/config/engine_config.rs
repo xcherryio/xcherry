@@ -102,6 +102,30 @@ impl Default for SnapshotConfig {
     }
 }
 
+/// Controls how startup reads the log batches it replays.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryConfig {
+    /// Defaults to 64; most log batches read ahead of the batch being applied, counting GETs in
+    /// flight. Replay reads about this many batches per object-store GET round trip, so 64 at a
+    /// 10 ms GET latency allows about 6,400 batches per second. Must be between 1 and 1024.
+    pub read_ahead_batches: u32,
+    /// Defaults to 64 MiB; log object bytes that replay may hold read ahead. Each read reserves
+    /// its batch's listed object size, and the reservation lasts until the batch is applied. A
+    /// batch larger than this value is read alone, so the log objects held never exceed the
+    /// larger of this value and the largest batch. Must be positive.
+    pub read_ahead_bytes: u64,
+}
+
+impl Default for RecoveryConfig {
+    fn default() -> Self {
+        Self {
+            read_ahead_batches: 64,
+            read_ahead_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
 /// Bounds reconstructable semantic history and checkpoint frequency for one run.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]

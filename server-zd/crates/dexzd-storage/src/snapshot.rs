@@ -87,6 +87,18 @@ pub enum RestoredLocalStore {
     Memory(InMemoryLocalStore),
 }
 
+impl RestoredLocalStore {
+    /// Starts [`RocksDbLocalStore::start_background_compaction`]; an in-memory store needs none.
+    ///
+    /// Returns an I/O error when the compaction thread cannot be started.
+    pub fn start_background_compaction(&self) -> StorageResult<()> {
+        match self {
+            Self::RocksDb(store) => store.start_background_compaction(),
+            Self::Memory(_) => Ok(()),
+        }
+    }
+}
+
 impl LocalReadView for RestoredLocalStore {
     fn get(&self, cf: ColumnFamily, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
         match self {

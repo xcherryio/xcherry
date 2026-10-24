@@ -18,8 +18,8 @@ mod validation;
 mod tests;
 
 pub use engine_config::{
-    ClusterConfig, CommitConfig, HistoryConfig, LeaseConfig, LimitsConfig, RetentionConfig,
-    SnapshotConfig, ValuesConfig,
+    ClusterConfig, CommitConfig, HistoryConfig, LeaseConfig, LimitsConfig, RecoveryConfig,
+    RetentionConfig, SnapshotConfig, ValuesConfig,
 };
 pub use service_config::{
     ApiConfig, MatchingConfig, SearchBackend, SearchConfig, StreamStoreBackend, StreamStoreConfig,
@@ -40,7 +40,7 @@ pub struct Config {
     pub cluster: ClusterConfig,
     /// Durable S3 storage and optional hard-delete destination. Defaults to the AWS chain and an unset bucket.
     pub object_store: ObjectStoreConfig,
-    /// Rebuildable RocksDB cache settings. Defaults to an unset directory and a 256 MiB block cache.
+    /// Rebuildable RocksDB cache settings. Defaults to an unset directory, a 256 MiB block cache, and a 256 MiB write-ahead log cap.
     pub local_storage: LocalStorageConfig,
     /// Group commit and multipart thresholds. Defaults to a 20 ms window and four in-flight writes.
     pub commit: CommitConfig,
@@ -48,6 +48,8 @@ pub struct Config {
     pub lease: LeaseConfig,
     /// Snapshot cadence and log cleanup. Defaults to 256 MiB or ten minutes.
     pub snapshot: SnapshotConfig,
+    /// Log replay read-ahead at startup. Defaults to 64 batches and 64 MiB.
+    pub recovery: RecoveryConfig,
     /// Per-run semantic history window and checkpoints. Defaults to 10000 events.
     pub history: HistoryConfig,
     /// Value sizes and wire hydration behavior. Defaults to 100-byte inline values and a 16 MiB maximum.

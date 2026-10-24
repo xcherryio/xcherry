@@ -51,6 +51,7 @@ dexzd-storage = { path = "crates/dexzd-storage" }
 dexzd-stream-store = { path = "crates/dexzd-stream-store" }
 dexzd-visibility-query = { path = "crates/dexzd-visibility-query" }
 dexzd-worker-dispatch = { path = "crates/dexzd-worker-dispatch" }
+dhat = "0.3"
 futures = "0.3"
 humantime-serde = "1"
 prost = "0.14"
