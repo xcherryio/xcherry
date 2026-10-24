@@ -13,7 +13,7 @@ use dexzd_protocol::dex::flow_service_client::FlowServiceClient;
 use dexzd_protocol::dex::worker_task_service_client::WorkerTaskServiceClient;
 use dexzd_protocol::dex::{GetFlowSummaryRequest, PollWorkerTaskRequest};
 use dexzd_protocol::dexzd::v1::NodeLease;
-use dexzd_server::{DevCommandOptions, ServerError, start_dev_server};
+use dexzd_server::{DevCommandOptions, start_dev_server};
 use prost::Message;
 use s3mock::{
     ChecksumAlgorithm, Durability, EtagMode, PutObjectRequest, Store, StoreConfig,
@@ -216,29 +216,20 @@ async fn cancelled_dev_start_releases_the_grpc_listener() {
     .await
     .expect("the cancelled dev server releases its embedded object store");
 
-    let retry_options = DevCommandOptions {
-        data_dir: directory.path().to_path_buf(),
-        listen: waiting_address,
-        log_dir: None,
-        config: None,
-    };
-    let mut retry = tokio::spawn(async move { start_dev_server(&retry_options).await });
-    tokio::select! {
-        result = &mut retry => {
-            match result.expect("the retry task completes normally") {
-                Err(ServerError::Listen { source, .. }) => panic!("retry could not bind: {source}"),
-                Err(error) => panic!("retry failed during startup: {error}"),
-                Ok(server) => panic!("retry started despite held lease on {}", server.local_address()),
+    let rebound_listener = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match tokio::net::TcpListener::bind(waiting_address).await {
+                Ok(listener) => break listener,
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("the cancelled dev server listener could not rebind: {error}"),
             }
         }
-        () = tokio::time::sleep(Duration::from_millis(500)) => {}
-    }
-    retry.abort();
-    let cancelled = match retry.await {
-        Ok(_) => panic!("the retry start completed"),
-        Err(error) => error,
-    };
-    assert!(cancelled.is_cancelled());
+    })
+    .await
+    .expect("the cancelled dev server releases its gRPC listener within five seconds");
+    drop(rebound_listener);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -422,11 +413,16 @@ async fn failed_startup_closes_the_health_listener() {
     let status = second.wait_for_exit(Duration::from_secs(10)).await;
     assert_eq!(status.code(), Some(1), "{}", second.log());
     assert!(second.log().contains("lease is held"), "{}", second.log());
+    let connection = tokio::time::timeout(
+        RESPONSE_BUDGET,
+        tokio::net::TcpStream::connect(second_address),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("failed startup health connect timed out:\n{}", second.log()));
     assert!(
-        tokio::net::TcpStream::connect(second_address)
-            .await
-            .is_err(),
-        "failed startup left the health listener open"
+        connection.is_err(),
+        "failed startup left the health listener open:\n{}",
+        second.log()
     );
     assert_eq!(
         first.terminate(SHUTDOWN_BUDGET).await.code(),

@@ -390,15 +390,25 @@ impl ServeProcess {
 
     /// Sends SIGTERM and waits for the process to exit.
     pub(crate) async fn terminate(&mut self, budget: Duration) -> ExitStatus {
+        let deadline = tokio::time::Instant::now() + budget;
         let process_id = self.child.id().expect("the process is still running");
-        let signal_status = Command::new("kill")
-            .arg("-TERM")
-            .arg(process_id.to_string())
-            .status()
+        let signal_status = tokio::time::timeout_at(
+            deadline,
+            Command::new("kill")
+                .arg("-TERM")
+                .arg(process_id.to_string())
+                .status(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("kill -TERM {process_id} timed out:\n{}", self.log()))
+        .expect("kill runs");
+        assert!(
+            signal_status.success(),
+            "kill -TERM {process_id} failed:\n{}",
+            self.log()
+        );
+        self.wait_for_exit(deadline.saturating_duration_since(tokio::time::Instant::now()))
             .await
-            .expect("kill runs");
-        assert!(signal_status.success(), "kill -TERM {process_id} failed");
-        self.wait_for_exit(budget).await
     }
 
     /// Waits for the process to exit by itself within `budget`.
