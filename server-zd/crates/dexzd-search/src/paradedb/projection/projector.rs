@@ -19,7 +19,8 @@ use tokio_postgres::Transaction;
 use tokio_postgres::types::{ToSql, Type};
 
 use super::super::search_backend::{
-    DATABASE_OPERATION_TIMEOUT, ParadeDbSearchBackend, database_error_message, is_connection_error,
+    DATABASE_OPERATION_TIMEOUT, ParadeDbSearchBackend, database_error_message,
+    is_transient_database_error,
 };
 use super::super::{SearchRow, SqlStatement, upsert_statement};
 use super::changes::{SearchDocumentChange, decode_search_index_key};
@@ -119,7 +120,7 @@ impl ProjectionError {
         match self {
             Self::Connection(SearchError::Unavailable(_)) => true,
             Self::Database { source, .. } | Self::RowDatabase { source, .. } => {
-                is_connection_error(source)
+                is_transient_database_error(source)
             }
             Self::StateRead(_) => true,
             _ => false,
@@ -721,7 +722,7 @@ fn operation_timeout(operation: &'static str) -> ProjectionError {
 
 fn should_retry(result: &Result<impl Sized, ProjectionError>, has_retried: bool) -> bool {
     !has_retried
-        && matches!(result, Err(ProjectionError::Database { source, .. } | ProjectionError::RowDatabase { source, .. }) if is_connection_error(source))
+        && matches!(result, Err(ProjectionError::Database { source, .. } | ProjectionError::RowDatabase { source, .. }) if is_transient_database_error(source))
 }
 
 #[cfg(test)]
