@@ -23,6 +23,7 @@ use crate::batch_read_ahead::{LogReadAheadConfig, OrderedBatchReader};
 const RECOVERY_WRITE_DEADLINE: Duration = Duration::from_secs(10);
 pub(crate) const LIST_PAGE_KEYS: u32 = 1_000;
 
+/// Every accepted batch and voided seq of a recovery, so it grows with the log.
 #[derive(Debug)]
 pub struct RecoveredStream {
     pub batches_to_apply: Vec<DecodedBatch>,
@@ -34,8 +35,8 @@ pub struct RecoveredStream {
 /// Where a recovered stream continues, once every accepted batch was returned.
 #[derive(Debug)]
 pub struct StreamRecoveryResult {
-    /// Seqs of batches that an EpochStart voided, in the order recovery found them.
-    pub void_sequences: Vec<u64>,
+    /// Number of batches that an EpochStart voided.
+    pub voided_batches: u64,
     /// Seq of the EpochStart that this recovery wrote.
     pub epoch_start_seq: u64,
     /// Seq after the last batch of the stream; the commit pipeline continues there.
@@ -123,6 +124,7 @@ pub async fn recover_stream_from(
 async fn collect_recovered_stream(
     mut recovery: StreamRecovery<'_>,
 ) -> Result<RecoveredStream, LogError> {
+    recovery.voided.sequences = Some(Vec::new());
     let mut batches_to_apply = Vec::new();
     loop {
         match recovery.next_step().await? {
@@ -130,7 +132,7 @@ async fn collect_recovered_stream(
             StreamRecoveryStep::Recovered(result) => {
                 return Ok(RecoveredStream {
                     batches_to_apply,
-                    void_sequences: result.void_sequences,
+                    void_sequences: recovery.voided.sequences.take().unwrap_or_default(),
                     epoch_start_seq: result.epoch_start_seq,
                     next_seq: result.next_seq,
                 });
@@ -151,8 +153,15 @@ pub struct StreamRecovery<'a> {
     /// Next seq to examine.
     seq: u64,
     effective_epoch: u64,
-    void_sequences: Vec<u64>,
+    voided: VoidedBatches,
     phase: RecoveryPhase<'a>,
+}
+
+/// Batches that an EpochStart voided; their seqs are kept only for the collecting functions.
+#[derive(Default)]
+struct VoidedBatches {
+    count: u64,
+    sequences: Option<Vec<u64>>,
 }
 
 enum RecoveryPhase<'a> {
@@ -226,7 +235,7 @@ impl<'a> StreamRecovery<'a> {
             from_seq,
             seq: from_seq,
             effective_epoch: effective_epoch_at_start,
-            void_sequences: Vec::new(),
+            voided: VoidedBatches::default(),
             phase: RecoveryPhase::Reading(Box::new(OrderedBatchReader::new(
                 store, stream, from_seq, None, read_ahead,
             ))),
@@ -314,9 +323,8 @@ impl<'a> StreamRecovery<'a> {
 
     async fn finish_recovery(&mut self) -> Result<StreamRecoveryResult, LogError> {
         self.phase = RecoveryPhase::Finished;
-        let void_sequences = std::mem::take(&mut self.void_sequences);
         self.writer
-            .finish_epoch_start(self.seq, void_sequences, self.read_ahead)
+            .finish_epoch_start(self.seq, &mut self.voided, self.read_ahead)
             .await
     }
 
@@ -329,7 +337,7 @@ impl<'a> StreamRecovery<'a> {
         seq: u64,
     ) -> Result<Option<DecodedBatch>, LogError> {
         if batch.header.epoch < self.effective_epoch {
-            self.void_sequences.push(seq);
+            self.voided.record(seq);
             return Ok(None);
         }
         if let Some(epoch_start) = &batch.header.epoch_start {
@@ -339,6 +347,15 @@ impl<'a> StreamRecovery<'a> {
             return Err(LogError::Fenced);
         }
         Ok(Some(batch))
+    }
+}
+
+impl VoidedBatches {
+    fn record(&mut self, seq: u64) {
+        self.count += 1;
+        if let Some(sequences) = &mut self.sequences {
+            sequences.push(seq);
+        }
     }
 }
 
@@ -362,18 +379,18 @@ struct EpochStartWriter<'a> {
 impl EpochStartWriter<'_> {
     /// Voids older batches after the EpochStart and fills every hole below the last listed batch.
     ///
-    /// Returns `void_sequences` with the voided seqs added and `next_seq` after the last batch, or
-    /// [`LogError::Fenced`] when that range holds a batch of this or a newer epoch.
+    /// Returns the result with the voided seqs recorded in `voided` and `next_seq` after the last
+    /// batch, or [`LogError::Fenced`] when that range holds a batch of this or a newer epoch.
     async fn finish_epoch_start(
         &self,
         epoch_start_seq: u64,
-        mut void_sequences: Vec<u64>,
+        voided: &mut VoidedBatches,
         read_ahead: LogReadAheadConfig,
     ) -> Result<StreamRecoveryResult, LogError> {
         let first_seq = next_seq_after(epoch_start_seq)?;
         let Some(last_seq) = self.last_listed_seq_after(epoch_start_seq).await? else {
             return Ok(StreamRecoveryResult {
-                void_sequences,
+                voided_batches: voided.count,
                 epoch_start_seq,
                 next_seq: first_seq,
             });
@@ -399,11 +416,11 @@ impl EpochStartWriter<'_> {
                 if batch.header.epoch >= self.new_epoch {
                     return Err(LogError::Fenced);
                 }
-                void_sequences.push(seq);
+                voided.record(seq);
             }
         }
         Ok(StreamRecoveryResult {
-            void_sequences,
+            voided_batches: voided.count,
             epoch_start_seq,
             next_seq: next_seq_after(last_seq)?,
         })

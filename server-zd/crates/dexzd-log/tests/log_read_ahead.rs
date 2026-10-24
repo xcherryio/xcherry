@@ -206,11 +206,11 @@ fn mixed_epoch_log() -> Vec<(u64, Bytes)> {
     objects
 }
 
-/// The applied seqs, voided seqs, EpochStart seq, and next seq of one recovery.
+/// The applied seqs, voided batch count, EpochStart seq, and next seq of one recovery.
 #[derive(Debug, PartialEq, Eq)]
 struct RecoveryOutcome {
     applied: Vec<u64>,
-    voided: Vec<u64>,
+    voided_batches: u64,
     epoch_start_seq: u64,
     next_seq: u64,
 }
@@ -241,7 +241,7 @@ async fn recover(
             StreamRecoveryStep::Recovered(result) => {
                 return Ok(RecoveryOutcome {
                     applied,
-                    voided: result.void_sequences,
+                    voided_batches: result.voided_batches,
                     epoch_start_seq: result.epoch_start_seq,
                     next_seq: result.next_seq,
                 });
@@ -278,7 +278,7 @@ async fn recovery_order_and_voiding_are_exact_under_reordered_get_completion() {
     expected_voided.extend([42, 44]);
     let expected = RecoveryOutcome {
         applied: expected_applied,
-        voided: expected_voided,
+        voided_batches: expected_voided.len() as u64,
         epoch_start_seq: 41,
         next_seq: 45,
     };
@@ -376,7 +376,7 @@ async fn reads_past_the_first_missing_seq_never_reach_recovery() {
             outcome,
             RecoveryOutcome {
                 applied: vec![1, 2, 3, 4, 5],
-                voided: vec![7, 8, 9, 10],
+                voided_batches: 4,
                 epoch_start_seq: 6,
                 next_seq: 11,
             },

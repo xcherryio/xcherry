@@ -24,6 +24,7 @@ zstd.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+dhat.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]

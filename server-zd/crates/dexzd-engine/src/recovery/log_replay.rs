@@ -214,7 +214,7 @@ impl LogReplay<'_> {
             last_applied_epoch = applied_epoch,
             batches,
             replayed_bytes,
-            voided_batches = recovered.void_sequences.len(),
+            voided_batches = recovered.voided_batches,
             epoch_start_seq = recovered.epoch_start_seq,
             "replayed the log stream"
         );
