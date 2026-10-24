@@ -466,6 +466,8 @@ impl FrameApplier {
                     committed,
                 });
         }
+        self.committed_commands
+            .finish_frame(frame.partition, &frame.position);
     }
 
     fn reject_frame(&self, frame: &PartitionFrame) {
