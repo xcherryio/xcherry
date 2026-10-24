@@ -63,6 +63,10 @@ enum Proposal<'view> {
         run_id: RunId,
         run: &'view RunView,
     },
+    TravelToWindowPoint {
+        run_id: RunId,
+        timestamp_micros: i64,
+    },
 }
 
 impl CommandGenerator {
@@ -98,7 +102,7 @@ impl CommandGenerator {
             selected.insert(run_ids[self.rng.random_range(0..run_ids.len() - 1)]);
         }
         let view = checker.view(flow_id, RunSelection::Only(&selected))?;
-        let proposals = self.proposals(&view);
+        let proposals = self.proposals(&view, checker);
         let total: u32 = proposals.iter().map(|(weight, _)| weight).sum();
         let mut ticket = self.rng.random_range(0..total);
         let mut chosen = None;
@@ -113,7 +117,11 @@ impl CommandGenerator {
         Ok(self.realize(flow_id, proposal))
     }
 
-    fn proposals<'view>(&mut self, view: &'view FlowView) -> Vec<(u32, Proposal<'view>)> {
+    fn proposals<'view>(
+        &mut self,
+        view: &'view FlowView,
+        checker: &ApplyChecker,
+    ) -> Vec<(u32, Proposal<'view>)> {
         let mut proposals = vec![(1, Proposal::StartFlow)];
         if !self.sent_results.is_empty() {
             proposals.push((2, Proposal::RedeliverResult));
@@ -139,6 +147,17 @@ impl CommandGenerator {
                     run,
                 },
             ));
+            if is_latest
+                && let Some(timestamp_micros) = checker.earlier_window_value_point(*run_id, run)
+            {
+                proposals.push((
+                    3,
+                    Proposal::TravelToWindowPoint {
+                        run_id: *run_id,
+                        timestamp_micros,
+                    },
+                ));
+            }
             if is_latest {
                 proposals.push((
                     1,
@@ -178,7 +197,7 @@ impl CommandGenerator {
                         proposals.push((weight, Proposal::StartAttempt(call())));
                     }
                     Ok(StepInvocationPhase::Running) => {
-                        proposals.push((10, Proposal::WorkerOutcome(call())));
+                        proposals.push((3, Proposal::WorkerOutcome(call())));
                         proposals.push((1, Proposal::StaleAttempt(call())));
                     }
                     _ => proposals.push((1, Proposal::StaleAttempt(call()))),
@@ -212,6 +231,13 @@ impl CommandGenerator {
             }
             Proposal::LaterHandler { run_id, run } => {
                 let body = client_model::later_handler_command(rng, flow_id, run_id, run);
+                self.envelope(flow_id, run_id.as_bytes().to_vec(), body)
+            }
+            Proposal::TravelToWindowPoint {
+                run_id,
+                timestamp_micros,
+            } => {
+                let body = client_model::time_travel_to_window_point(flow_id, timestamp_micros);
                 self.envelope(flow_id, run_id.as_bytes().to_vec(), body)
             }
             Proposal::StartAttempt(call) => {

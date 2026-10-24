@@ -43,8 +43,9 @@ fn request_id(rng: &mut ChaCha8Rng, prefix: &str) -> String {
 
 pub(crate) fn run_settings() -> RunSettings {
     RunSettings {
-        history_window_semantic_events: 10_000,
-        history_prune_chunk_semantic_events: 1000,
+        history_window_semantic_events: 3,
+        history_prune_chunk_semantic_events: 2,
+        // A generous cap keeps retained points available for pinned snapshot and replay coverage.
         max_retained_superseded_bytes: 256 << 20,
         retention_after_close_micros: 60 * SECOND,
         wire_inline_threshold_bytes: WIRE_INLINE_THRESHOLD_BYTES,
@@ -293,4 +294,17 @@ pub(crate) fn later_handler_command(
             }),
         }),
     }
+}
+
+pub(crate) fn time_travel_to_window_point(flow_id: &str, timestamp_micros: i64) -> Command {
+    Command::TimeTravel(TimeTravelCommand {
+        request: Some(ResetFlowRequest {
+            flow_id: flow_id.to_owned(),
+            reset_type: FlowResetType::HistoryEventTime as i32,
+            history_event_time: (i128::from(timestamp_micros) * 1000).to_string(),
+            reason: "inspect an earlier value".to_owned(),
+            skip_writes_reapply: true,
+            ..ResetFlowRequest::default()
+        }),
+    })
 }
