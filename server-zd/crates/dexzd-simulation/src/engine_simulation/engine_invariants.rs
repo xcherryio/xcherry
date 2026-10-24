@@ -143,13 +143,14 @@ pub(crate) fn check_recovered_flows(
             RunSelection::All,
         )
         .map_err(|error| InvariantViolation::new("row-decoding", error.to_string()))?;
-        check_flow(flow_id, &view, &genesis_memory(&view))?;
+        check_flow(flow_id, &view, &recovered_memory(&view, shadow))?;
     }
     Ok(())
 }
 
 /// Genesis holders as the store records them; the shadow already checked them command by command.
-fn genesis_memory(view: &FlowView) -> CheckerMemory {
+/// Window points come from the shadow, which recorded each point while it was current.
+fn recovered_memory(view: &FlowView, shadow: &ApplyChecker) -> CheckerMemory {
     let genesis_values = view
         .runs
         .iter()
@@ -163,7 +164,15 @@ fn genesis_memory(view: &FlowView) -> CheckerMemory {
             (*run_id, pinned)
         })
         .collect();
-    CheckerMemory { genesis_values }
+    let window_points = view
+        .runs
+        .keys()
+        .filter_map(|run_id| Some((*run_id, shadow.window_points(run_id)?.clone())))
+        .collect();
+    CheckerMemory {
+        genesis_values,
+        window_points,
+    }
 }
 
 fn memory_state_of(store: &EngineLocalStore) -> Result<MemoryFlowState, InvariantViolation> {

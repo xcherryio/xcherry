@@ -14,7 +14,6 @@ use bytes::Bytes;
 use dexzd_engine::{
     CommitUrgency, DeterministicCommandApplier, EngineNode, EngineNodeConfig,
     EngineNodeDependencies, EngineRuntimeHooks, EngineServices, LocalStoreConfig, NodeStopReason,
-    SystemEngineIdSource,
 };
 use dexzd_keyspace::row_keys::{checkpoint_key, history_record_key};
 use dexzd_keyspace::{ColumnFamily, PartitionHasher, RunId, TenantId};
@@ -56,7 +55,7 @@ async fn start_deterministic_node(
             object_store: cluster.object_store.clone(),
             clock: cluster.clock.clone(),
             applier: Arc::new(DeterministicCommandApplier),
-            id_source: Arc::new(SystemEngineIdSource),
+            id_source: Arc::new(dexzd_engine::SystemEngineIdSource),
         },
         move |services: EngineServices| {
             *captured_for_factory.lock().expect("capture lock") =
