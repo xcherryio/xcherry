@@ -114,8 +114,7 @@ test("model input is serialized and invalid runtime input is rejected", async ()
   });
 });
 
-test("Flow config override survives Continue-As-New", async (context) => {
-  if (await skipIfServerZD(context, "Continue-As-New")) return;
+test("Flow config override survives Continue-As-New", async () => {
   const flow = new BasicFlow();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("config-override");

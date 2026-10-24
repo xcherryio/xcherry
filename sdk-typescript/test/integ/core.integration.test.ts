@@ -136,8 +136,7 @@ test("signals, mapped signals, and skipped timer form one combination", async ()
   });
 });
 
-test("execute-only Steps survive Continue-As-New", async (context) => {
-  if (await skipIfServerZD(context, "Continue-As-New")) return;
+test("execute-only Steps survive Continue-As-New", async () => {
   const flow = new ExecuteOnlyFlow();
   await withEnvironment([flow], async ({ client }) => {
     const id = flowId("skip-wait-until");
