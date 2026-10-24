@@ -26,6 +26,8 @@ func TestStateApiFailAndProceedTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C21: server-zd rejects Step failure policies.
+	requireGoServerSetting(t, "Step failure policies")
 	for i := 0; i < *repeatIntegTest; i++ {
 		doTestStateApiFailAndProceed(t, service.BackendTypeTemporal, nil)
 		smallWaitForFastTest()
@@ -118,6 +120,17 @@ func TestStateApiRetryAfterTemporal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	flowId := wf_state_api_fail_and_proceed.FlowType + uuid.NewString()
+	stepOptions := &dexpb.StepOptions{
+		WaitForRetryPolicy: &dexpb.RetryPolicy{
+			InitialIntervalSeconds: 10,
+			MaximumAttempts:        2,
+		},
+		WaitForFailurePolicy: dexpb.WaitForMethodFailurePolicy_WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE,
+	}
+	if isServerZDBinaryMode() {
+		// C21: server-zd rejects Step failure policies; the retried attempt succeeds without one.
+		stepOptions.WaitForFailurePolicy = dexpb.WaitForMethodFailurePolicy_WAIT_FOR_METHOD_FAILURE_POLICY_UNSPECIFIED
+	}
 	_, err := flowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
 		RequestId:          newRequestID(),
 		FlowId:             flowId,
@@ -127,13 +140,7 @@ func TestStateApiRetryAfterTemporal(t *testing.T) {
 		StepInput: &dexpb.Value{
 			Kind: &dexpb.Value_StringValue{StringValue: wf_state_api_fail_and_proceed.RetryOnceInput},
 		},
-		StepOptions: &dexpb.StepOptions{
-			WaitForRetryPolicy: &dexpb.RetryPolicy{
-				InitialIntervalSeconds: 10,
-				MaximumAttempts:        2,
-			},
-			WaitForFailurePolicy: dexpb.WaitForMethodFailurePolicy_WAIT_FOR_METHOD_FAILURE_POLICY_PROCEED_ON_FAILURE,
-		},
+		StepOptions:      stepOptions,
 		FlowStartOptions: withWorkerTarget(nil, workerTarget),
 	})
 	require.NoError(t, err)

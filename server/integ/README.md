@@ -28,7 +28,18 @@ Worker-address switching scenario remains push-only.
 Binary mode applies the harness's 12-second WaitForFlow limit in its client and
 adds SYNC durability to StartFlow requests. The Go Server's 2-second minimum
 Step heartbeat timeout has no binary equivalent; tests that rely on it start
-the in-process Go Server and are skipped in binary mode.
+the in-process Go Server and are skipped in binary mode. The Step cancellation
+scenario uses a 10-second heartbeat timeout in binary mode instead.
+
+Each launch registers the custom search attributes that the Temporal dev server
+predefines, such as **CustomKeywordField** and **CustomDatetimeField**, through
+**SyncAttributeIndexes**. The YAML file always sets the Stream Store backend.
+It is disabled unless a test selects the memory backend, as in the Go Server.
+
+Tests for features that server-zd rejects or changes skip in binary mode or
+adjust their expectations. Each guard has a comment that names the
+server-zd behavior difference. Stream Store tests that use Redis still need
+Redis on `127.0.0.1:6379`.
 
 ```shell
 cd server

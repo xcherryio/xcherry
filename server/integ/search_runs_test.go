@@ -29,6 +29,8 @@ func TestSearchRunsTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C3: server-zd never returns CONTINUED_AS_NEW runs.
+	requireGoServerSetting(t, "Continue-As-New")
 	verifySearchRunInclusion(t, service.BackendTypeTemporal)
 }
 

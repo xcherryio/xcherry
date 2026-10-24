@@ -888,6 +888,7 @@ func TestStreamAPITemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	requireGoServerSetting(t, "external Stream Store")
 	streamName := "api-" + newRequestID()
 	redisClient := newStreamRedisClient(t)
 	t.Cleanup(func() { deleteStreamTestKeys(t, redisClient, streamName) })
