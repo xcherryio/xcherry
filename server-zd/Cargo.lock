@@ -965,7 +965,11 @@ dependencies = [
  "dexzd-keyspace",
  "dexzd-protocol",
  "prost",
+ "prost-types",
+ "serde_json",
  "thiserror",
+ "time",
+ "uuid",
 ]
 
 [[package]]
@@ -1021,6 +1025,7 @@ dependencies = [
  "dexzd-worker-dispatch",
  "futures",
  "prost",
+ "prost-types",
  "tempfile",
  "thiserror",
  "tokio",

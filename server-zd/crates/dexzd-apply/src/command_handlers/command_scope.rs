@@ -7,7 +7,6 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use dexzd_keyspace::{RunId, TenantId};
-use dexzd_protocol::dex::FlowHistoryEvent;
 use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand};
 
 use crate::{ApplyEffect, ApplyOutcome, BehaviorVersion, StateWrite};
@@ -40,29 +39,11 @@ impl<'command> CommandScope<'command> {
 pub(crate) struct HandlerOutput {
     pub(crate) reply: CommandReply,
     pub(crate) effects: Vec<ApplyEffect>,
-    /// History events to record for this command, without event IDs yet.
-    pub(crate) events: Vec<FlowHistoryEvent>,
     /// The run the command applied to or created.
     pub(crate) run_id: Option<RunId>,
-    /// Semantic commands are time travel targets (plan section 8.4).
-    pub(crate) is_semantic: bool,
-    /// Commands carrying external input that time travel may reapply.
-    pub(crate) is_external_input: bool,
 }
 
 impl HandlerOutput {
-    /// A rejection that changes nothing.
-    pub(crate) fn rejected(reply: CommandReply) -> Self {
-        Self {
-            reply,
-            effects: Vec::new(),
-            events: Vec::new(),
-            run_id: None,
-            is_semantic: false,
-            is_external_input: false,
-        }
-    }
-
     pub(crate) fn into_outcome(self, writes: Vec<StateWrite>) -> ApplyOutcome {
         ApplyOutcome {
             writes,

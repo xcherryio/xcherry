@@ -109,6 +109,10 @@ impl<'reader> FlowTransaction<'reader> {
     }
 
     /// Deletes every key in `[start, end)`, including rows buffered earlier in this call.
+    #[expect(
+        dead_code,
+        reason = "Run purge (task A6) deletes whole runs with range deletes."
+    )]
     pub(crate) fn delete_range(
         &mut self,
         column_family: ColumnFamily,
