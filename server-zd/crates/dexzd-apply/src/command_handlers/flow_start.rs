@@ -21,6 +21,8 @@ use dexzd_protocol::dexzd::v1::{
     flow_command::Command, timer_id,
 };
 
+use prost::Message;
+
 use crate::ApplyError;
 use crate::command_handlers::command_replies::{error_reply, grpc_code};
 use crate::command_handlers::flow_close::{FlowClosing, close_flow};
@@ -30,7 +32,7 @@ use crate::command_handlers::{CommandScope, HandlerResult};
 use crate::projections::history_events;
 use crate::state_access::{FlowTransaction, RunRows, read_flow_directory, write_flow_directory};
 use crate::steps::{NewStepExecution, arm_timer, create_step_execution};
-use crate::values::{ValueHolder, hold_stored_value};
+use crate::values::{ValueHolder, ValueRejection, hold_stored_value};
 
 /// Everything needed to start a run, from a client StartFlow or a child Flow start.
 pub(crate) struct RunStart<'start> {
@@ -183,28 +185,48 @@ pub(crate) fn start_run(
         )));
     }
     pin_genesis_attributes(transaction, &cursor, &options.attributes)?;
-    let start_step = NewStepExecution {
-        step_type: &request.start_step_type,
-        input: request.step_input.as_ref(),
-        options: request.step_options.as_ref(),
-        from_step_execution_id: "",
-        is_timeout_handler: false,
-    };
-    let start_step_id =
-        match create_step_execution(transaction, &mut cursor, scope.now_micros, &start_step)? {
-            Ok(step_execution_id) => step_execution_id,
-            Err(rejection) => {
+    // Without a start Step type the Flow waits for RPCs or a close, as in the Go Server.
+    if request.start_step_type.is_empty() {
+        // The unused input still reaches history, so it must respect the value limit.
+        if let Some(input) = &request.step_input {
+            let size_bytes = u64::try_from(input.encoded_len()).unwrap_or(u64::MAX);
+            let max_value_bytes = cursor.value_limits().max_value_bytes;
+            if size_bytes > max_value_bytes {
+                let rejection = ValueRejection::TooLarge {
+                    size_bytes,
+                    max_value_bytes,
+                };
                 return Ok(HandlerResult::Rejected(error_reply(
                     grpc_code::INVALID_ARGUMENT,
                     ErrorSubStatus::Uncategorized,
                     rejection.message(),
                 )));
             }
+        }
+    } else {
+        let start_step = NewStepExecution {
+            step_type: &request.start_step_type,
+            input: request.step_input.as_ref(),
+            options: request.step_options.as_ref(),
+            from_step_execution_id: "",
+            is_timeout_handler: false,
         };
-    if let Some(step) = cursor.rows.step_execution(transaction, &start_step_id)?
-        && let Some(input) = &step.input
-    {
-        hold_stored_value(transaction, cursor.rows, input, &ValueHolder::Genesis)?;
+        let start_step_id =
+            match create_step_execution(transaction, &mut cursor, scope.now_micros, &start_step)? {
+                Ok(step_execution_id) => step_execution_id,
+                Err(rejection) => {
+                    return Ok(HandlerResult::Rejected(error_reply(
+                        grpc_code::INVALID_ARGUMENT,
+                        ErrorSubStatus::Uncategorized,
+                        rejection.message(),
+                    )));
+                }
+            };
+        if let Some(step) = cursor.rows.step_execution(transaction, &start_step_id)?
+            && let Some(input) = &step.input
+        {
+            hold_stored_value(transaction, cursor.rows, input, &ValueHolder::Genesis)?;
+        }
     }
     if cursor.record.timeout_deadline_micros > 0 {
         let deadline = cursor.record.timeout_deadline_micros;

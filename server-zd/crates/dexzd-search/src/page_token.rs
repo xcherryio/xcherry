@@ -16,15 +16,15 @@ const TOKEN_BYTES: usize = 59;
 const CHECKSUM_START: usize = TOKEN_BYTES - 8;
 
 #[derive(Debug, Clone)]
-pub(super) struct PagePosition {
-    pub(super) is_running: bool,
-    pub(super) close_time_ns: Option<i64>,
-    pub(super) start_time_ns: i64,
-    pub(super) run_id: RunId,
+pub(crate) struct PagePosition {
+    pub(crate) is_running: bool,
+    pub(crate) close_time_ns: Option<i64>,
+    pub(crate) start_time_ns: i64,
+    pub(crate) run_id: RunId,
 }
 
 impl PagePosition {
-    pub(super) fn encode(&self, tenant_id: TenantId, query: &str) -> String {
+    pub(crate) fn encode(&self, tenant_id: TenantId, query: &str) -> String {
         let mut bytes = Vec::with_capacity(TOKEN_BYTES);
         bytes.push(TOKEN_VERSION);
         bytes.extend_from_slice(&tenant_id.to_be_bytes());
@@ -43,7 +43,7 @@ impl PagePosition {
         token
     }
 
-    pub(super) fn decode(
+    pub(crate) fn decode(
         token: &str,
         tenant_id: TenantId,
         query: &str,
