@@ -49,11 +49,12 @@ use search_projection::{ParadeDbSearch, SearchProjection};
 
 /// Part of the budget for open calls, so the engine still stops cleanly after a stuck call.
 const GRPC_DRAIN_BUDGET: Duration = Duration::from_secs(4);
-/// Shutdown budgets of the later steps; with the gRPC drain they total 12.5 seconds.
+/// Shutdown budgets of the later steps; with the gRPC drain they total 14.5 seconds.
 const EFFECT_TASKS_STOP_BUDGET: Duration = Duration::from_secs(2);
 const SEARCH_PROJECTION_STOP_BUDGET: Duration = Duration::from_secs(1);
 /// Covers the engine's three-second task stop and its lease release.
-const ENGINE_STOP_BUDGET: Duration = Duration::from_millis(3_500);
+const ENGINE_STOP_BUDGET: Duration =
+    EngineNode::SHUTDOWN_BUDGET.saturating_add(Duration::from_millis(500));
 const STREAM_STORE_CLOSE_BUDGET: Duration = Duration::from_secs(1);
 const EMBEDDED_S3_STOP_BUDGET: Duration = Duration::from_secs(1);
 /// gRPC keepalive, equal to the Go Server's.
@@ -75,11 +76,11 @@ impl RunningServer {
         self.local_address
     }
 
-    /// Stops gracefully within 12.5 seconds and returns how serving ended.
+    /// Stops gracefully within 14.5 seconds and returns how serving ended.
     ///
     /// Returns [`ServerError::NodeStopped`] when the node had already stopped for another reason,
     /// such as a lost lease, and [`ServerError::ShutdownIncomplete`] when a shutdown step overran
-    /// its budget.
+    /// its budget or failed, such as a lease release that object storage rejected.
     pub async fn shutdown(self) -> Result<(), ServerError> {
         self.shutdown_request.cancel();
         self.wait().await
@@ -285,7 +286,12 @@ impl ServerNode {
                 Err(error) => {
                     registry.close_long_polls();
                     effect_tasks.shutdown().await;
-                    engine.shutdown().await;
+                    if let Err(release_error) = engine.shutdown().await {
+                        tracing::error!(
+                            error = %release_error,
+                            "the node lease stays held after a failed start"
+                        );
+                    }
                     close_stream_store(&stream_store).await;
                     return Err(error);
                 }
@@ -412,7 +418,7 @@ impl ServerNode {
             teardown.record_overrun("search projection", SEARCH_PROJECTION_STOP_BUDGET);
         }
         teardown
-            .run("engine", ENGINE_STOP_BUDGET, engine.shutdown())
+            .run_fallible("engine", ENGINE_STOP_BUDGET, engine.shutdown())
             .await;
         teardown
             .run(

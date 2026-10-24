@@ -9,14 +9,14 @@
 use dexzd_apply::BehaviorVersion;
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{
-    ClusterBootstrap, ClusterConfig, NodeConfig, bootstrap_or_validate, create_initial_manifest,
-    read_manifest,
+    ClusterBootstrap, ClusterConfig, MetadataError, NodeConfig, bootstrap_or_validate,
+    create_initial_manifest, read_manifest,
 };
 use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::{Manifest, SnapshotReference};
 
-use crate::recovery::EngineStartError;
 use crate::recovery::node_streams::NodeStreams;
+use crate::recovery::{EngineStartError, describe_lost_ownership};
 
 /// The validated cluster object and manifest that a starting node works with.
 pub(crate) struct ClusterMetadata {
@@ -43,6 +43,37 @@ impl ClusterMetadata {
             Some(manifest) => manifest,
             None => create_initial_manifest(object_store, clock, partition_count, node).await?,
         };
+        Self::validate(cluster, manifest, node)
+    }
+
+    /// Re-reads the manifest once `epoch` holds the lease, keeping the immutable cluster object.
+    /// Fails if another epoch owns it.
+    pub(crate) async fn read_under_lease(
+        self,
+        object_store: &dyn ObjectStore,
+        node: &NodeConfig,
+        epoch: u64,
+    ) -> Result<Self, EngineStartError> {
+        let manifest = read_manifest(object_store)
+            .await?
+            .ok_or(MetadataError::Missing { key: "manifest" })?;
+        let metadata = Self::validate(self.cluster, manifest, node)?;
+        if let Some(detail) = describe_lost_ownership(&metadata.manifest, &node.node_id, epoch) {
+            return Err(MetadataError::LeaseLost {
+                node_id: node.node_id.clone(),
+                detail,
+            }
+            .into());
+        }
+        Ok(metadata)
+    }
+
+    fn validate(
+        cluster: ClusterBootstrap,
+        manifest: Manifest,
+        node: &NodeConfig,
+    ) -> Result<Self, EngineStartError> {
+        let partition_count = cluster.cluster.partition_count;
         if manifest.partition_count != partition_count
             || manifest.partitions.len() != partition_count as usize
         {

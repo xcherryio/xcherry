@@ -150,7 +150,18 @@ impl LogReplay<'_> {
             self.epoch,
             &writer_process_id,
         )
-        .await?;
+        .await
+        .map_err(|error| match error {
+            LogError::MissingBatches {
+                missing_seq,
+                next_existing_seq,
+            } => EngineStartError::LogUnavailable {
+                incarnation: stream.incarnation,
+                first_retained_seq: next_existing_seq,
+                resumes_at: missing_seq,
+            },
+            error => error.into(),
+        })?;
         tracing::info!(
             incarnation = stream.incarnation,
             last_applied_seq = applied_seq,

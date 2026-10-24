@@ -569,6 +569,125 @@ async fn recovery_seals_first_hole_and_voids_older_pipelined_object() {
 }
 
 #[tokio::test]
+async fn recovery_fills_the_holes_between_non_contiguous_pipelined_batches() {
+    let store = Arc::new(MemoryStore::default());
+    store
+        .insert(stream().batch_key(1), batch(1, 1, b"acknowledged"))
+        .await;
+    // A killed writer's pipelined seqs 2 and 4 never landed, but 3 and 5 did.
+    for seq in [3, 5] {
+        store
+            .insert(stream().batch_key(seq), batch(1, seq, b"unacknowledged"))
+            .await;
+    }
+    let recovered = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 0, 2, "second")
+        .await
+        .unwrap();
+    assert_eq!(recovered.epoch_start_seq, 2);
+    assert_eq!(recovered.void_sequences, vec![3, 5]);
+    assert_eq!(recovered.next_seq, 6);
+    let filler = decode_batch(
+        &store
+            .get(&stream().batch_key(4))
+            .await
+            .unwrap()
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    assert_eq!(filler.header.epoch, 2);
+    assert!(filler.header.epoch_start.is_some() && filler.records.is_empty());
+
+    let (pipeline, mut committed) = CommitPipeline::start(
+        store.clone(),
+        Arc::new(FixedClock),
+        stream(),
+        2,
+        recovered.next_seq,
+        CommitPipelineConfig::default(),
+    )
+    .unwrap();
+    let first = pipeline
+        .propose(2, Bytes::from_static(b"first after recovery"), true)
+        .await
+        .unwrap();
+    let second = pipeline
+        .propose(2, Bytes::from_static(b"second after recovery"), true)
+        .await
+        .unwrap();
+    assert_eq!(first.committed.await.unwrap().unwrap(), 6);
+    assert_eq!(second.committed.await.unwrap().unwrap(), 7);
+    assert_eq!(committed.recv().await.unwrap().seq, 6);
+    assert_eq!(committed.recv().await.unwrap().seq, 7);
+    drop(pipeline);
+
+    let recovered_again = recover_stream(store.as_ref(), &FixedClock, &stream(), 0, 0, 3, "third")
+        .await
+        .unwrap();
+    assert_eq!(recovered_again.void_sequences, vec![3, 5]);
+    assert_eq!(
+        recovered_again
+            .batches_to_apply
+            .iter()
+            .map(|batch| batch.header.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 4, 6, 7]
+    );
+    let replayed_records: Vec<_> = recovered_again
+        .batches_to_apply
+        .iter()
+        .flat_map(|batch| batch.records.iter().map(|record| record.bytes.clone()))
+        .collect();
+    assert_eq!(
+        replayed_records,
+        vec![
+            Bytes::from_static(b"acknowledged"),
+            Bytes::from_static(b"first after recovery"),
+            Bytes::from_static(b"second after recovery"),
+        ]
+    );
+    assert_eq!(recovered_again.epoch_start_seq, 8);
+    assert_eq!(recovered_again.next_seq, 9);
+}
+
+#[tokio::test]
+async fn hole_filling_voids_a_late_older_batch_and_fences_a_current_one() {
+    let late = MemoryStore::default();
+    for seq in [1, 3, 5] {
+        late.insert(stream().batch_key(seq), batch(1, seq, b"old writer"))
+            .await;
+    }
+    // The old writer's seq 4 lands just before recovery fills that hole.
+    late.inject_race(stream().batch_key(4), batch(1, 4, b"late"))
+        .await;
+    let recovered = recover_stream(&late, &FixedClock, &stream(), 0, 0, 2, "second")
+        .await
+        .unwrap();
+    assert_eq!(recovered.epoch_start_seq, 2);
+    assert_eq!(recovered.void_sequences, vec![3, 4, 5]);
+    assert_eq!(recovered.next_seq, 6);
+
+    for competing_epoch in [2, 3] {
+        let fenced = MemoryStore::default();
+        for seq in [1, 3] {
+            fenced
+                .insert(stream().batch_key(seq), batch(1, seq, b"old writer"))
+                .await;
+        }
+        fenced
+            .insert(
+                stream().batch_key(5),
+                batch(competing_epoch, 5, b"competing writer"),
+            )
+            .await;
+        assert!(matches!(
+            recover_stream(&fenced, &FixedClock, &stream(), 0, 0, 2, "second").await,
+            Err(LogError::Fenced)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn racing_older_writer_restarts_pipeline_without_resequencing() {
     let store = Arc::new(MemoryStore::default());
     store
@@ -750,6 +869,50 @@ async fn recovery_resumes_after_a_cleaned_applied_position() {
     assert_eq!(recovered.batches_to_apply[0].records[0].bytes, "valid tail");
     assert_eq!(recovered.epoch_start_seq, 4);
     assert!(store.get(&stream().batch_key(1)).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn recovery_rejects_a_deleted_range_after_the_applied_position() {
+    let store = MemoryStore::default();
+    for seq in 1..=10 {
+        store
+            .insert(stream().batch_key(seq), batch(1, seq, b"acknowledged"))
+            .await;
+    }
+    // Cleanup after a newer snapshot deleted seq 1 through 6, including the applied seq 3.
+    let deleted: Vec<String> = (1..=6).map(|seq| stream().batch_key(seq)).collect();
+    store.delete_many(&deleted).await.unwrap();
+    let result = recover_stream(&store, &FixedClock, &stream(), 3, 1, 2, "stale-state").await;
+    assert!(
+        matches!(
+            result,
+            Err(LogError::MissingBatches {
+                missing_seq: 4,
+                next_existing_seq: 7
+            })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(store.put_count.load(Ordering::SeqCst), 0);
+    assert!(store.get(&stream().batch_key(4)).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn recovery_seals_a_pipelined_hole_at_the_snapshot_boundary() {
+    let store = MemoryStore::default();
+    // Cleanup kept the snapshot's applied seq 3; seq 4 never landed, but pipelined 5 and 6 did.
+    for seq in [3, 5, 6] {
+        store
+            .insert(stream().batch_key(seq), batch(1, seq, b"pipelined"))
+            .await;
+    }
+    let recovered = recover_stream(&store, &FixedClock, &stream(), 3, 1, 2, "replacement")
+        .await
+        .unwrap();
+    assert!(recovered.batches_to_apply.is_empty());
+    assert_eq!(recovered.epoch_start_seq, 4);
+    assert_eq!(recovered.void_sequences, vec![5, 6]);
+    assert_eq!(recovered.next_seq, 7);
 }
 
 #[tokio::test]

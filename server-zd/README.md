@@ -89,14 +89,16 @@ Startup proceeds in this order:
   searchable, then returns Unavailable.
 - One ParadeDB schema belongs to one Dex cluster.
 
-On SIGTERM or SIGINT the node stops within 10 seconds. Health reports NOT_SERVING, Workers are told
-to reconnect, long polls close, and open calls get 4 seconds to finish. Then effects and the engine
-stop, and the node releases its lease. The process exits 0, and a replacement process with the same
-`cluster.nodeId` acquires the lease at once.
+On SIGTERM or SIGINT the node stops within 14.5 seconds. Health reports NOT_SERVING, Workers are
+told to reconnect, long polls close, and open calls get 4 seconds to finish. Then effects and the
+engine stop, and the node releases its lease. The process exits 0, and a replacement process with
+the same `cluster.nodeId` acquires the lease at once. When object storage rejects the release, or
+the release does not finish within 2 seconds, the process exits 1 and the lease stays held until it
+expires.
 
 A lost lease, a stopped commit pipeline, or a halted Flow runtime stops the node, and the process
-exits 1. Restart it. A signal that arrives before startup completes abandons startup and also exits
-1; that lease expires after `lease.duration`.
+exits 1. Restart it. A signal that arrives during startup stops the node once startup finishes, with
+the same shutdown and exit status. A failed startup releases its lease and exits 1.
 
 Logs go to standard error. `RUST_LOG` filters them; the default level is `info`.
 

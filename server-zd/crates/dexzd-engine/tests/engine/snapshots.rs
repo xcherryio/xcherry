@@ -65,7 +65,7 @@ async fn snapshot_covers_every_partition_and_is_recorded_in_the_manifest() {
             .iter()
             .all(|partition| partition.snapshot.as_ref() == Some(&reference))
     );
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -85,7 +85,7 @@ async fn snapshots_start_after_the_log_threshold_or_the_interval() {
     test.commit_prompt("threshold-flow", 1).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 
     let mut cluster = TestCluster::new();
     let test = cluster.start_in_memory().await;
@@ -109,7 +109,7 @@ async fn snapshots_start_after_the_log_threshold_or_the_interval() {
     test.commit_prompt("idle-flow", 1).await;
     tokio::time::sleep(Duration::from_secs(10 * 60 + 2)).await;
     assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 2);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -124,7 +124,7 @@ async fn restart_restores_the_snapshot_and_replays_only_later_batches() {
     let second = cluster.start_in_memory().await;
     assert_eq!(second.applier.applied_commands().len(), 2);
     assert_eq!(second.committed_count("restore-flow").await, 5);
-    second.node.shutdown().await;
+    second.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -165,7 +165,7 @@ async fn log_batches_are_deleted_only_after_a_snapshot_is_old_enough() {
     let restarted = cluster.start_in_memory().await;
     assert_eq!(restarted.committed_count("cleanup-flow").await, 5);
     assert_eq!(restarted.applier.applied_commands().len(), 1);
-    restarted.node.shutdown().await;
+    restarted.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -183,7 +183,7 @@ async fn a_failed_snapshot_keeps_serving_and_succeeds_later() {
     cluster.faults.fail_puts_under("never-matches/");
     test.node.take_snapshot().await.expect("snapshot succeeds");
     assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }
 
 async fn snapshot_object_keys(cluster: &TestCluster) -> Vec<String> {
@@ -266,7 +266,7 @@ async fn retention_reclaims_the_lineage_that_a_restore_replaced() {
         restarted.committed_count("lineage-flow").await,
         3 + retained_count as u64
     );
-    restarted.node.shutdown().await;
+    restarted.node.shutdown().await.expect("lease released");
 }
 
 #[tokio::test(start_paused = true)]
@@ -287,5 +287,5 @@ async fn a_snapshot_reads_each_stored_snapshot_manifest_at_most_once() {
     test.node.take_snapshot().await.expect("snapshot succeeds");
     assert_eq!(manifest_reads(), reads_before);
     assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 5);
-    test.node.shutdown().await;
+    test.node.shutdown().await.expect("lease released");
 }

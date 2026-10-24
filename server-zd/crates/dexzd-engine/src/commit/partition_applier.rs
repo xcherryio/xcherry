@@ -7,7 +7,9 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bytes::Bytes;
 use dexzd_apply::{ApplyContext, ApplyOutcome};
@@ -20,12 +22,12 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::command_applier::CommandApplier;
-use crate::commit::EngineLocalStore;
 use crate::commit::commit_state::{
     CommitState, NodeStopReason, PendingCommand, partition_stopped_error,
 };
 use crate::commit::replay_checks::compare_repeated_apply;
 use crate::commit::staged_state_reader::StagedStateReader;
+use crate::commit::{CommitProgress, EngineLocalStore};
 use crate::recovery::CommittedCommandSink;
 use crate::runtime::{CommittedCommand, CommittedFlowCommand};
 
@@ -158,6 +160,93 @@ impl Drop for PartitionApplierPool {
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("partition applier pool stopped")]
 pub(crate) struct ApplierPoolClosed;
+
+/// Shortest interval at which a serving node records the last routed batch as every partition's
+/// position.
+const MIN_APPLIED_POSITION_ADVANCE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Larger clusters advance less often, so periodic advances write at most this many partition
+/// records per second.
+const ADVANCED_PARTITIONS_PER_SECOND: u64 = 8192;
+
+/// Advances every running partition, idle ones included, to the last routed batch, shortening
+/// restart replay.
+pub(crate) struct AppliedPositionAdvancer {
+    appliers: Arc<PartitionApplierPool>,
+    progress: Arc<CommitProgress>,
+    node_id: String,
+    incarnation: u32,
+    /// Epoch of this process; every batch it routes carries it.
+    epoch: u64,
+    interval: Duration,
+    /// Routed seq of the last advance; holding it serializes advances.
+    advanced_seq: tokio::sync::Mutex<u64>,
+}
+
+impl AppliedPositionAdvancer {
+    /// Creates an advancer whose first advance covers batches routed after recovery's advance.
+    pub(crate) fn new(
+        appliers: Arc<PartitionApplierPool>,
+        progress: Arc<CommitProgress>,
+        node_id: String,
+        incarnation: u32,
+        epoch: u64,
+        partition_count: u32,
+    ) -> Self {
+        let advanced_seq = progress.last_routed_seq.load(Ordering::Acquire);
+        let interval = MIN_APPLIED_POSITION_ADVANCE_INTERVAL.max(Duration::from_millis(
+            u64::from(partition_count) * 1000 / ADVANCED_PARTITIONS_PER_SECOND,
+        ));
+        Self {
+            appliers,
+            progress,
+            node_id,
+            incarnation,
+            epoch,
+            interval,
+            advanced_seq: tokio::sync::Mutex::new(advanced_seq),
+        }
+    }
+
+    /// Advances once per interval in which a batch was routed, until cancelled or the lanes stop.
+    pub(crate) async fn run(self: Arc<Self>, cancellation: CancellationToken) {
+        loop {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => return,
+                () = tokio::time::sleep(self.interval) => {}
+            }
+            if self.advance_to_last_routed().await.is_err() {
+                // The lanes stop only at shutdown or after the node stopped.
+                return;
+            }
+        }
+    }
+
+    /// Marks every running partition applied through the last routed batch; halted partitions and
+    /// stopped nodes write nothing.
+    ///
+    /// Returns [`ApplierPoolClosed`] when the applier lanes stopped before the advance finished.
+    pub(crate) async fn advance_to_last_routed(&self) -> Result<(), ApplierPoolClosed> {
+        let mut advanced_seq = self.advanced_seq.lock().await;
+        let routed_seq = self.progress.last_routed_seq.load(Ordering::Acquire);
+        if routed_seq <= *advanced_seq {
+            return Ok(());
+        }
+        self.appliers
+            .advance_applied_position(
+                &LogPosition {
+                    node_id: self.node_id.clone(),
+                    incarnation: self.incarnation,
+                    seq: routed_seq,
+                },
+                self.epoch,
+            )
+            .await?;
+        *advanced_seq = routed_seq;
+        Ok(())
+    }
+}
 
 struct ApplierLane {
     frame_applier: Arc<FrameApplier>,
