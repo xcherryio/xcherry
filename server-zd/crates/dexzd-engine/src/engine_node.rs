@@ -211,6 +211,7 @@ impl EngineNode {
                 partition_hasher: metadata.cluster.partition_hasher.clone(),
                 node_meta_lock: node_meta_lock.clone(),
                 local_store: store.clone(),
+                id_source: id_source.clone(),
             });
             let appliers = Arc::new(PartitionApplierPool::start(
                 FrameApplier {

@@ -54,4 +54,20 @@ impl EngineIdSource for SeededIdSource {
     fn lineage_id(&self) -> Uuid {
         self.next_uuid_v7()
     }
+
+    fn run_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn channel_message_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn hard_delete_object_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn dispatch_task_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
 }

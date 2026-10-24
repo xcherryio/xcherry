@@ -33,6 +33,8 @@ pub use effects::{
     MethodRequest, NodeMetaUploadLedger, decode_hard_delete_value, encode_hard_delete_value,
     hard_delete_placeholder_value,
 };
+#[cfg(feature = "test-util")]
+pub use engine_id_source::SeededEngineIdSourceForTest;
 pub use engine_id_source::{EngineIdSource, SystemEngineIdSource};
 pub use engine_node::{EngineNode, EngineNodeConfig, EngineNodeDependencies};
 pub use long_poll::{

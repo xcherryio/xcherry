@@ -617,7 +617,7 @@ impl MethodAttempt {
                 return Ok(());
             }
         };
-        result.assign_channel_message_ids();
+        result.assign_channel_message_ids(self.context.id_source.as_ref());
         let mut backoff = self.context.retry_backoff();
         let uploads = loop {
             let upload = self

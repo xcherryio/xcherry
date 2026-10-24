@@ -350,6 +350,7 @@ impl ServerNode {
                     )),
                     clock.clone(),
                     partition_hasher.clone(),
+                    services.id_source.clone(),
                 );
                 let (effect_runner, effect_tasks) = EffectRunner::new(
                     &components.effects,
@@ -360,6 +361,7 @@ impl ServerNode {
                         clock: clock.clone(),
                         validation_config: components.validation().clone(),
                         stream_store: stream_store.clone(),
+                        id_source: services.id_source.clone(),
                     },
                 );
                 let registry = FlowRuntimeRegistry::new(
@@ -372,6 +374,7 @@ impl ServerNode {
                         rpc_invoker: Arc::new(PullWorkerRpcInvoker::new(dispatch.clone())),
                         hard_delete_reader: Arc::new(hard_delete_objects.clone()),
                         hard_delete_uploader: Arc::new(hard_delete_objects),
+                        id_source: services.id_source,
                     },
                 );
                 let effect_tasks = effect_tasks.start(Arc::new(registry.clone()));

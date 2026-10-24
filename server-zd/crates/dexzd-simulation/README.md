@@ -43,7 +43,8 @@ runtime with paused time, and every choice derives from one seed.
   delete, invoke RPCs, and read, retrying unavailable calls with the same request ID.
 - **Determinism.** The engine runs frame applies, state reads, and snapshot uploads on the
   calling task (`BlockingWorkPlacement::CallingTaskForTest`), and every engine `select!` is
-  biased. The trace replaces engine-minted UUIDs with first-appearance ordinals.
+  biased. Every ID the engine persists comes from one `SeededEngineIdSourceForTest` that all
+  processes of a seed share, so the trace keeps engine IDs as minted.
 
 ### Invariants
 
@@ -105,4 +106,5 @@ DEXZD_SIMULATION_SEED=7 cargo test -p dexzd-simulation --test engine_simulation 
 `DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_SEED` also select the apply simulation's seeds
 when both tests run. A failing seed prints its reproduction command and the last 400 trace events.
 `DEXZD_SIMULATION_PRINT_EVENTS=1` prints the trace tail of a passing seed. A self-test runs seeds
-twice and requires identical trace hashes.
+twice and requires identical raw traces, final local stores, and stored objects. Lease holder
+IDs are the one exception: the cluster metadata crate mints them outside the engine.

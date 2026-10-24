@@ -51,6 +51,7 @@ use futures::future::BoxFuture;
 use prost::Message;
 use tokio::sync::mpsc;
 
+use crate::SystemEngineIdSource;
 use crate::effects::effect_runtime::{EffectRuntime, EffectRuntimeError, InvocationStartOutcome};
 use crate::effects::state_reads::{RunLocation, read_step_execution};
 use crate::effects::{
@@ -835,6 +836,7 @@ impl EffectHarness {
             ledger,
             Arc::clone(&clock) as _,
             hasher.clone(),
+            Arc::new(SystemEngineIdSource),
         );
         let dispatcher = Arc::new(FakeDispatcher::new());
         let stream_store = Arc::new(
@@ -856,6 +858,7 @@ impl EffectHarness {
                     ..ValidationConfig::default()
                 },
                 stream_store: Arc::clone(&stream_store),
+                id_source: Arc::new(SystemEngineIdSource),
             },
         );
         let runtime = Arc::new(ApplyRuntime {

@@ -25,6 +25,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::CommandApplier;
+use crate::engine_id_source::EngineIdSource;
 use crate::long_poll::WaiterRegistry;
 use crate::runtime::flow_runtime::{FlowRuntime, FlowRuntimeState};
 use crate::runtime::rpc_locks::{
@@ -53,6 +54,8 @@ pub struct FlowRuntimeDependencies {
     pub hard_delete_reader: Arc<dyn HardDeleteValueReader>,
     /// Uploads hard-delete Attribute values before their commands are proposed.
     pub hard_delete_uploader: Arc<dyn HardDeleteValueUploader>,
+    /// Creates run IDs and Channel message IDs.
+    pub id_source: Arc<dyn EngineIdSource>,
 }
 
 /// A pending method call that waits for its locks (plan 8.3).
@@ -480,7 +483,13 @@ impl FlowRuntimeRegistry {
             )
         {
             if inbox.new_run_id.is_empty() {
-                inbox.new_run_id = uuid::Uuid::now_v7().as_bytes().to_vec();
+                inbox.new_run_id = self
+                    .inner
+                    .dependencies
+                    .id_source
+                    .run_id()
+                    .as_bytes()
+                    .to_vec();
             }
             if inbox.settings.is_none() {
                 inbox.settings = Some(self.inner.config.run_settings);

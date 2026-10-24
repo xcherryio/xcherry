@@ -14,7 +14,7 @@ use dexzd_apply::StateWrite;
 use dexzd_engine::EngineLocalStore;
 use dexzd_keyspace::ColumnFamily;
 use dexzd_protocol::dexzd::v1::{StepInvocationPhase, StepMethod};
-use dexzd_storage::{LocalStore, ScanDirection};
+use dexzd_storage::{LocalReadView, LocalStore, ScanDirection};
 
 use crate::apply_checker::ApplyChecker;
 use crate::engine_simulation::committed_log::CommittedLog;
@@ -122,6 +122,48 @@ pub(crate) fn check_store_matches_shadow(
             return Err(state_difference(
                 column_family,
                 format!("the node lacks row {}", hex(shadow_key)),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Compares every column family of two stores row by row, like `compare_store_views` with no
+/// canonicalized fields.
+///
+/// Returns the first differing key, or the error that stopped a read.
+pub(crate) fn compare_local_stores(
+    expected: &EngineLocalStore,
+    actual: &EngineLocalStore,
+) -> Result<(), String> {
+    let expected_view = expected
+        .consistent_view()
+        .map_err(|error| error.to_string())?;
+    let actual_view = actual
+        .consistent_view()
+        .map_err(|error| error.to_string())?;
+    for column_family in ColumnFamily::ALL {
+        let scan = |view: &dyn LocalReadView| {
+            view.scan(
+                column_family,
+                None,
+                None,
+                ScanDirection::Forward,
+                usize::MAX,
+            )
+            .map_err(|error| error.to_string())
+        };
+        let expected_rows = scan(expected_view.as_ref())?;
+        let actual_rows = scan(actual_view.as_ref())?;
+        let row_count = expected_rows.len().max(actual_rows.len());
+        if let Some(index) =
+            (0..row_count).find(|index| expected_rows.get(*index) != actual_rows.get(*index))
+        {
+            let key_of = |rows: &[(Vec<u8>, Vec<u8>)]| rows.get(index).map(|(key, _)| hex(key));
+            return Err(format!(
+                "column family {column_family:?} row {index}: {:?} vs {:?}",
+                key_of(&expected_rows),
+                key_of(&actual_rows)
             ));
         }
     }

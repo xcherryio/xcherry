@@ -25,6 +25,7 @@ use prost::Message;
 use tokio::sync::Notify;
 
 use crate::CommandApplier;
+use crate::SystemEngineIdSource;
 use crate::runtime::tests::model_applier::ModelApplier;
 use crate::runtime::{
     CommitError, CommitTicket, CommitTicketSender, CommitUrgency, CommittedCommand,
@@ -410,6 +411,7 @@ impl RuntimeHarness {
                 rpc_invoker: rpc_invoker.clone(),
                 hard_delete_reader: hard_delete_reader.clone(),
                 hard_delete_uploader: hard_delete_uploader.clone(),
+                id_source: Arc::new(SystemEngineIdSource),
             },
         );
         Self {

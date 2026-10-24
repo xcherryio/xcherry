@@ -57,6 +57,7 @@ pub(crate) use method_request::resolve_method_durability;
 pub(crate) use state_reads::{RunLocation, read_run_record, read_step_execution};
 
 use crate::blocking_work::BlockingWorkPlacement;
+use crate::engine_id_source::EngineIdSource;
 use crate::recovery::{PartitionRuntimeRebuilder, RuntimeRebuildError};
 use crate::runtime::{CommitUrgency, FlowAddress, RuntimeEffectSink};
 use dispatch::{DispatchScheduler, InvocationStartResult};
@@ -245,6 +246,8 @@ pub struct EffectDependencies {
     pub validation_config: ValidationConfig,
     /// Receives Step Stream writes from Worker frames, in frame order, on a best-effort basis.
     pub stream_store: Arc<StreamStore>,
+    /// Creates child run IDs, dispatch task IDs, and Worker Channel message IDs.
+    pub id_source: Arc<dyn EngineIdSource>,
 }
 
 /// Shared state of every effect task.
@@ -257,6 +260,7 @@ pub(crate) struct EffectContext {
     pub(crate) clock: Arc<dyn WallClock>,
     pub(crate) validation_config: ValidationConfig,
     pub(crate) stream_store: Arc<StreamStore>,
+    pub(crate) id_source: Arc<dyn EngineIdSource>,
     /// Hard-delete uploads recorded before this node started; recovery checks only these, so
     /// uploads of commands proposed after startup are never mistaken for orphans.
     /// An error fails every partition rebuild, because a later read could include new uploads.
@@ -458,6 +462,7 @@ impl EffectTasks {
                 ..self.dependencies.validation_config
             },
             stream_store: self.dependencies.stream_store,
+            id_source: self.dependencies.id_source,
             startup_pending_uploads,
             shutdown: shutdown.clone(),
             tracker: tracker.clone(),

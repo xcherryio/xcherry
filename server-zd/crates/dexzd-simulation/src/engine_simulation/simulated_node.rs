@@ -16,11 +16,11 @@ use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{ClusterConfig, LeaseConfig, METADATA_FORMAT_VERSION, NodeConfig};
 use dexzd_engine::{
     BlockingWorkPlacement, CommandApplier, CommitConfig, DeterministicCommandApplier,
-    EffectDependencies, EffectRunner, EffectTasksHandle, EffectsConfig, EngineLocalStore,
-    EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks, EngineServices,
-    EngineStartError, FlowRuntimeDependencies, FlowRuntimeRegistry, HardDeleteObjects,
-    LocalStoreConfig, NodeMetaUploadLedger, NodeStopReason, RecoveryConfig, RuntimeConfig,
-    SnapshotConfig, SystemEngineIdSource, default_run_settings,
+    EffectDependencies, EffectRunner, EffectTasksHandle, EffectsConfig, EngineIdSource,
+    EngineLocalStore, EngineNode, EngineNodeConfig, EngineNodeDependencies, EngineRuntimeHooks,
+    EngineServices, EngineStartError, FlowRuntimeDependencies, FlowRuntimeRegistry,
+    HardDeleteObjects, LocalStoreConfig, NodeMetaUploadLedger, NodeStopReason, RecoveryConfig,
+    RuntimeConfig, SnapshotConfig, default_run_settings,
 };
 use dexzd_keyspace::{ColumnFamily, KEY_LAYOUT_VERSION};
 use dexzd_object_store::{InMemoryObjectStore, ObjectStore, WriteCondition};
@@ -56,6 +56,8 @@ pub(crate) struct ClusterEnvironment {
     pub(crate) committed_log: Arc<CommittedLog>,
     pub(crate) trace: Arc<EventTrace>,
     pub(crate) storage_observations: Arc<Mutex<StorageObservations>>,
+    /// The seeded source of every ID the engine persists, shared by all processes.
+    pub(crate) id_source: Arc<dyn EngineIdSource>,
     /// How long closed runs stay before their purge; some seeds keep them past the end.
     pub(crate) retention_after_close: Duration,
     pub(crate) origin: tokio::time::Instant,
@@ -184,7 +186,7 @@ impl NodeProcess {
                 object_store: object_store_port,
                 clock: wall_clock,
                 applier,
-                id_source: Arc::new(SystemEngineIdSource),
+                id_source: Arc::clone(&environment.id_source),
             },
             move |services: EngineServices| {
                 let partition_hasher = services.partition_hasher.clone();
@@ -196,6 +198,7 @@ impl NodeProcess {
                     )),
                     factory_clock.clone(),
                     partition_hasher.clone(),
+                    services.id_source.clone(),
                 );
                 let (effect_runner, effect_tasks) = EffectRunner::new(
                     &effects_config(settings),
@@ -206,6 +209,7 @@ impl NodeProcess {
                         clock: factory_clock,
                         validation_config: ValidationConfig::default(),
                         stream_store,
+                        id_source: services.id_source.clone(),
                     },
                 );
                 let registry = FlowRuntimeRegistry::new(
@@ -218,6 +222,7 @@ impl NodeProcess {
                         rpc_invoker: worker_port,
                         hard_delete_reader: Arc::new(hard_delete_objects.clone()),
                         hard_delete_uploader: Arc::new(hard_delete_objects),
+                        id_source: services.id_source,
                     },
                 );
                 let effect_tasks = effect_tasks.start(Arc::new(registry.clone()));

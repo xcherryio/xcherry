@@ -8,7 +8,10 @@
 
 //! Engine simulation over a fixed seed set; the crate README lists its environment variables.
 
-use dexzd_simulation::{EngineSimulationConfig, EngineSimulationSummary, run_engine_seed};
+use dexzd_simulation::{
+    EngineSimulationConfig, EngineSimulationSummary, run_engine_seed,
+    run_engine_seed_with_final_state,
+};
 
 const DEFAULT_SEED_COUNT: u64 = 64;
 const DEFAULT_ACTIVE_SECONDS: u64 = 120;
@@ -170,30 +173,30 @@ fn assert_covered(total: &EngineSimulationSummary) {
 }
 
 #[test]
-fn one_seed_produces_the_same_event_trace_twice() {
+fn one_seed_produces_the_same_trace_and_final_state_twice() {
     let config = EngineSimulationConfig {
         active_seconds: 60,
         ..EngineSimulationConfig::default()
     };
     for seed in [FIRST_SEED, FIRST_SEED + 1, FIRST_SEED + 2] {
-        let first = run_engine_seed(seed, &config).unwrap_or_else(|failure| panic!("{failure}"));
-        let second = run_engine_seed(seed, &config).unwrap_or_else(|failure| panic!("{failure}"));
-        if first.trace_hash != second.trace_hash {
-            let divergence = first
-                .recent_events
-                .iter()
-                .zip(&second.recent_events)
-                .find(|(left, right)| left != right);
-            panic!(
-                "seed {seed} produced different traces: {} events hash {:x}, then {} events hash \
-                 {:x}; first difference among the last events: {divergence:?}",
-                first.trace_events, first.trace_hash, second.trace_events, second.trace_hash
-            );
+        let run = || {
+            run_engine_seed_with_final_state(seed, &config)
+                .unwrap_or_else(|failure| panic!("{failure}"))
+        };
+        let (first_summary, first_state) = run();
+        let (second_summary, second_state) = run();
+        if let Some(difference) = first_state.first_difference(&second_state) {
+            panic!("two runs of seed {seed} differ: {difference}");
         }
+        assert_eq!(first_summary.trace_hash, second_summary.trace_hash);
         assert!(
-            first.trace_events > 300,
+            first_state.trace_events.len() > 300,
             "seed {seed} produced only {} events",
-            first.trace_events
+            first_state.trace_events.len()
+        );
+        assert!(
+            first_state.local_store.is_some() && !first_state.objects.is_empty(),
+            "seed {seed} left no final state to compare"
         );
     }
 }

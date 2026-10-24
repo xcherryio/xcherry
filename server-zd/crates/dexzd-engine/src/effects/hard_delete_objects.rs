@@ -29,6 +29,7 @@ use prost::Message;
 
 use crate::effects::EffectError;
 use crate::effects::state_reads::{RunLocation, decode_row, scan_all};
+use crate::engine_id_source::EngineIdSource;
 use crate::runtime::{
     FlowAddress, HardDeleteReadError, HardDeleteUploadError, HardDeleteUploadOutcome,
     HardDeleteUploads as RuntimeHardDeleteUploads, HardDeleteValueReader, HardDeleteValueUploader,
@@ -196,6 +197,7 @@ pub struct HardDeleteObjects {
     ledger: Arc<dyn HardDeleteUploadLedger>,
     clock: Arc<dyn WallClock>,
     hasher: PartitionHasher,
+    id_source: Arc<dyn EngineIdSource>,
 }
 
 impl HardDeleteObjects {
@@ -206,12 +208,14 @@ impl HardDeleteObjects {
         ledger: Arc<dyn HardDeleteUploadLedger>,
         clock: Arc<dyn WallClock>,
         hasher: PartitionHasher,
+        id_source: Arc<dyn EngineIdSource>,
     ) -> Self {
         Self {
             store,
             ledger,
             clock,
             hasher,
+            id_source,
         }
     }
 
@@ -240,7 +244,11 @@ impl HardDeleteObjects {
             let Some(is_string_value) = hard_delete_value_kind(write) else {
                 continue;
             };
-            let object_id = uuid::Uuid::now_v7().hyphenated().to_string();
+            let object_id = self
+                .id_source
+                .hard_delete_object_id()
+                .hyphenated()
+                .to_string();
             planned.push((write_index, object_id, is_string_value));
         }
         if planned.is_empty() {

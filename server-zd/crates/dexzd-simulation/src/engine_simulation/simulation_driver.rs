@@ -15,9 +15,11 @@ use std::time::Duration;
 use dexzd_api::FlowOperations;
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::MetadataError;
-use dexzd_engine::{EngineLocalStore, EngineStartError};
+use dexzd_engine::{EngineLocalStore, EngineStartError, SeededEngineIdSourceForTest};
 use dexzd_keyspace::TenantId;
-use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, ObjectStoreOperation};
+use dexzd_object_store::{
+    FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
+};
 use dexzd_protocol::dex::FlowAlreadyStartedOptions;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -44,7 +46,8 @@ use crate::engine_simulation::simulated_object_store::StorageObservations;
 use crate::engine_simulation::simulated_workers::SimulatedWorkers;
 use crate::engine_simulation::workload::{OPERATION_MARKER_PREFIX, start_flow_request};
 use crate::engine_simulation::{
-    EngineSimulationConfig, EngineSimulationFailure, EngineSimulationSummary,
+    EngineSimulationConfig, EngineSimulationFailure, EngineSimulationFinalState,
+    EngineSimulationSummary,
 };
 use crate::invariants::InvariantViolation;
 
@@ -113,10 +116,11 @@ struct Simulation {
     summary: EngineSimulationSummary,
 }
 
+/// Runs one seed; returns what it exercised and its final state, or the first broken invariant.
 pub(crate) async fn run_simulation(
     seed: u64,
     config: EngineSimulationConfig,
-) -> Result<EngineSimulationSummary, Box<EngineSimulationFailure>> {
+) -> Result<(EngineSimulationSummary, EngineSimulationFinalState), Box<EngineSimulationFailure>> {
     let mut simulation = Simulation::new(seed, config);
     let outcome = simulation.run().await;
     let simulated_micros = elapsed_micros(simulation.environment.origin);
@@ -125,7 +129,10 @@ pub(crate) async fn run_simulation(
         task.abort();
     }
     match outcome {
-        Ok(()) => Ok(simulation.finish_summary()),
+        Ok(()) => {
+            let final_state = simulation.final_state().await;
+            Ok((simulation.finish_summary(), final_state))
+        }
         Err(violation) => {
             simulation
                 .environment
@@ -148,6 +155,7 @@ impl Simulation {
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
         let trace = Arc::new(EventTrace::new(origin));
         let storage_observations = Arc::new(Mutex::new(StorageObservations::default()));
+        let id_clock: Arc<dyn WallClock> = Arc::new(SimulatedWallClock::new(origin, 0));
         let storage_clock: Arc<dyn WallClock> = Arc::new(SimulatedWallClock::new(origin, 0));
         let shared_store = Arc::new(InMemoryObjectStore::with_injector_and_clock(
             Arc::new(NoInjectedFaults),
@@ -172,6 +180,7 @@ impl Simulation {
                 )),
                 trace,
                 storage_observations,
+                id_source: Arc::new(SeededEngineIdSourceForTest::new(seed, id_clock)),
                 retention_after_close,
                 origin,
             },
@@ -673,6 +682,40 @@ impl Simulation {
         self.serving
             .as_ref()
             .map_or_else(String::new, |serving| serving.process_label.clone())
+    }
+
+    /// Returns the trace, the serving process's local store, and every stored object.
+    async fn final_state(&self) -> EngineSimulationFinalState {
+        let shared_store = &self.environment.shared_store;
+        let mut objects = BTreeMap::new();
+        let mut start_after = None;
+        loop {
+            let listing = shared_store
+                .list("", start_after.as_deref(), 1_000)
+                .await
+                .expect("the shared in-memory store lists without faults");
+            for object in listing.objects {
+                let content = shared_store
+                    .get(&object.key)
+                    .await
+                    .expect("the shared in-memory store reads without faults");
+                if let Some(content) = content {
+                    objects.insert(object.key, content.bytes);
+                }
+            }
+            match listing.next_start_after {
+                Some(next) => start_after = Some(next),
+                None => break,
+            }
+        }
+        EngineSimulationFinalState {
+            trace_events: self.environment.trace.all_events(),
+            local_store: self
+                .serving
+                .as_ref()
+                .map(|serving| copy_local_store(&serving.local_store)),
+            objects,
+        }
     }
 
     fn finish_summary(&mut self) -> EngineSimulationSummary {

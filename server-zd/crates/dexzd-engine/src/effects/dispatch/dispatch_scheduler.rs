@@ -191,7 +191,7 @@ async fn try_start_until_answered(
     key: &MethodAttemptKey,
 ) -> InvocationStartResult {
     let invocation: StepInvocationKey = key.invocation();
-    let task_id = uuid::Uuid::now_v7().as_bytes().to_vec();
+    let task_id = context.id_source.dispatch_task_id().as_bytes().to_vec();
     let mut backoff = context.retry_backoff();
     loop {
         let outcome = match read_dispatch_pull_routing(context, flow, key) {

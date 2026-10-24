@@ -200,7 +200,12 @@ impl FlowRuntimeRegistry {
         let mut response = result.response;
         // Apply cannot mint IDs, so every publication gets a new one, as Go's AssignIDs does.
         for message in &mut response.publish_to_channel {
-            message.message_id = uuid::Uuid::now_v7().to_string();
+            message.message_id = self
+                .inner
+                .dependencies
+                .id_source
+                .channel_message_id()
+                .to_string();
         }
         let uploads = self
             .upload_hard_delete_values(flow, run.run_id, &mut response.upsert_attributes)

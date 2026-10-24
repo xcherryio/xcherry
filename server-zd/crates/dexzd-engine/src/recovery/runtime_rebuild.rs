@@ -13,6 +13,7 @@ use dexzd_protocol::dexzd::v1::LogPosition;
 use futures::future::BoxFuture;
 
 use crate::commit::{CommandCommitter, EngineLocalStore};
+use crate::engine_id_source::EngineIdSource;
 use crate::runtime::CommittedFlowCommand;
 
 /// Engine services handed to the runtime factory before the log is replayed.
@@ -25,6 +26,8 @@ pub struct EngineServices {
     pub node_meta_lock: Arc<Mutex<()>>,
     /// The local store, for runtime state kept in NodeMeta such as pending hard-delete uploads.
     pub local_store: Arc<EngineLocalStore>,
+    /// Creates the IDs the runtime and effects persist; pass it to their dependencies.
+    pub id_source: Arc<dyn EngineIdSource>,
 }
 
 /// What the runtime factory returns: where committed commands go and how partitions rebuild.

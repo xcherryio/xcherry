@@ -22,6 +22,12 @@ mod workload;
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
+
+use bytes::Bytes;
+use dexzd_engine::EngineLocalStore;
+use dexzd_protocol::dexzd::v1::NodeLease;
+use prost::Message;
 
 use crate::invariants::InvariantViolation;
 
@@ -46,7 +52,7 @@ impl Default for EngineSimulationConfig {
 /// What one seed exercised, and the hash of its event trace.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineSimulationSummary {
-    /// Hash of the event trace; equal for two runs of one seed.
+    /// Hash of the raw event trace; equal for two runs of one seed.
     pub trace_hash: u64,
     /// Events in the trace.
     pub trace_events: u64,
@@ -188,6 +194,69 @@ impl fmt::Display for EngineSimulationFailure {
     }
 }
 
+/// Everything one seed left behind, so two runs of the seed can be compared exactly.
+pub struct EngineSimulationFinalState {
+    /// Every trace event, oldest first, with engine IDs as the engine minted them.
+    pub trace_events: Vec<String>,
+    /// A copy of the serving process's local store at the end, if a process served.
+    pub local_store: Option<Arc<EngineLocalStore>>,
+    /// Every object in the shared object store at the end, by key.
+    pub objects: BTreeMap<String, Bytes>,
+}
+
+impl EngineSimulationFinalState {
+    /// Describes the first difference from `other`: a trace event, a local store row, or an
+    /// object.
+    ///
+    /// Returns `None` when the traces, both local stores, and both object stores are identical.
+    pub fn first_difference(&self, other: &Self) -> Option<String> {
+        let event_count = self.trace_events.len().max(other.trace_events.len());
+        if let Some(index) = (0..event_count)
+            .find(|index| self.trace_events.get(*index) != other.trace_events.get(*index))
+        {
+            return Some(format!(
+                "trace event {index} differs: {:?} vs {:?}",
+                self.trace_events.get(index),
+                other.trace_events.get(index)
+            ));
+        }
+        match (&self.local_store, &other.local_store) {
+            (Some(first), Some(second)) => {
+                if let Err(difference) = engine_invariants::compare_local_stores(first, second) {
+                    return Some(format!("final local stores differ: {difference}"));
+                }
+            }
+            (None, None) => {}
+            _ => return Some("only one run ended with a serving process".to_owned()),
+        }
+        let keys: std::collections::BTreeSet<&String> =
+            self.objects.keys().chain(other.objects.keys()).collect();
+        keys.into_iter()
+            .find(|key| {
+                comparable_object(key, self.objects.get(*key))
+                    != comparable_object(key, other.objects.get(*key))
+            })
+            .map(|key| {
+                format!(
+                    "object {key} differs: {:?} vs {:?} bytes",
+                    self.objects.get(key).map(Bytes::len),
+                    other.objects.get(key).map(Bytes::len)
+                )
+            })
+    }
+}
+
+/// Returns the object as compared between runs; lease holder IDs are random outside the engine.
+fn comparable_object(key: &str, object: Option<&Bytes>) -> Option<Bytes> {
+    let object = object?;
+    if !key.starts_with("lease/") {
+        return Some(object.clone());
+    }
+    let mut lease = NodeLease::decode(object.clone()).expect("stored leases decode");
+    lease.holder_process_id.clear();
+    Some(Bytes::from(lease.encode_to_vec()))
+}
+
 /// Runs one seed on a new current-thread runtime with paused time.
 ///
 /// Returns what the seed exercised, or the first broken invariant with the events before it.
@@ -195,6 +264,17 @@ pub fn run_engine_seed(
     seed: u64,
     config: &EngineSimulationConfig,
 ) -> Result<EngineSimulationSummary, Box<EngineSimulationFailure>> {
+    run_engine_seed_with_final_state(seed, config).map(|(summary, _)| summary)
+}
+
+/// Runs one seed like [`run_engine_seed`] and also returns its final state.
+///
+/// Returns what the seed exercised and its final state, or the first broken invariant with the
+/// events before it.
+pub fn run_engine_seed_with_final_state(
+    seed: u64,
+    config: &EngineSimulationConfig,
+) -> Result<(EngineSimulationSummary, EngineSimulationFinalState), Box<EngineSimulationFailure>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)

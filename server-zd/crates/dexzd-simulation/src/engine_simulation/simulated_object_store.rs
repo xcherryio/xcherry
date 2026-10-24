@@ -233,9 +233,8 @@ impl NodeObjectStore {
         let is_effect_applied = rng.random_bool(0.5);
         drop(faults);
         self.trace.record(&format!(
-            "{} object-store {operation} {} {fault:?} applied={is_effect_applied}",
-            self.process_label,
-            without_content_hash(key)
+            "{} object-store {operation} {key} {fault:?} applied={is_effect_applied}",
+            self.process_label
         ));
         CallPlan {
             fault,
@@ -456,20 +455,6 @@ fn key_class(key: &str) -> &'static str {
         Some("snapshot") => "snapshot",
         Some("cluster") => "cluster",
         _ => "other",
-    }
-}
-
-/// Snapshot file keys end with a hash of content that holds engine UUIDs; the trace omits it.
-fn without_content_hash(key: &str) -> &str {
-    match key.rsplit_once('.') {
-        Some((stem, hash))
-            if key.starts_with("snapshot/")
-                && hash.len() == 16
-                && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
-        {
-            stem
-        }
-        _ => key,
     }
 }
 
