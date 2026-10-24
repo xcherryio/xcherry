@@ -42,7 +42,7 @@ pub trait CommittedCommandSink: Send + Sync + 'static {
     /// Replayed commands arrive before rebuild with an older epoch; rebuild owns their effects.
     fn apply_committed(&self, committed: CommittedFlowCommand);
 
-    /// Marks the end of one partition frame, after its last [`Self::apply_committed`] call.
+    /// Called once after the last [`Self::apply_committed`] of each applied frame, replayed frames included.
     fn finish_frame(&self, _partition: PartitionId, _position: &LogPosition) {}
 }
 
