@@ -45,9 +45,6 @@ fn method_lock_keys(step: &StepExecutionRecord, method: StepMethod) -> Vec<Strin
         StepMethod::WaitFor => options.wait_for_lock_attribute_keys,
         StepMethod::Execute | StepMethod::Unspecified => options.execute_lock_attribute_keys,
     };
-    if step.is_timeout_handler {
-        keys = Vec::new();
-    }
     keys.sort();
     keys.dedup();
     keys
