@@ -70,6 +70,7 @@ impl ValueRejection {
 }
 
 /// Assigns value IDs for the values one command stores.
+#[derive(Clone)]
 pub(crate) struct ValueIdAllocator {
     run_seq: u64,
     next_index: u32,
