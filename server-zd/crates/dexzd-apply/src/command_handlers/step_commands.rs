@@ -251,19 +251,21 @@ pub(crate) fn apply_flow_timeout(
             }
         }
         FlowTimeoutPolicy::Cancel => {
-            close_flow(
-                transaction,
-                cursor,
-                scope,
-                FlowClosing::canceled("the Flow timed out"),
-            )?;
+            close_flow(transaction, cursor, scope, FlowClosing::canceled())?;
         }
         FlowTimeoutPolicy::Fail | FlowTimeoutPolicy::Unspecified => {
             close_flow(
                 transaction,
                 cursor,
                 scope,
-                FlowClosing::failed(FlowErrorType::FlowTimeout, "the Flow timed out"),
+                FlowClosing::failed(
+                    FlowErrorType::FlowTimeout,
+                    format!(
+                        "Flow timed out after {} seconds",
+                        (cursor.record.timeout_deadline_micros - cursor.record.started_at_micros)
+                            / 1_000_000
+                    ),
+                ),
             )?;
         }
     }
