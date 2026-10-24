@@ -565,7 +565,11 @@ async fn dropped_ticket_reports_node_stopping() {
         )
         .await
         .unwrap();
-    drop(harness.committer.take_next());
+    assert!(harness.drop_next());
+    assert!(
+        harness.registry.halted().is_cancelled(),
+        "a dropped ticket halts without a waiter"
+    );
     let error = proposal.ticket.wait().await.unwrap_err();
     assert!(matches!(error, CommitError::NodeStopping { .. }));
 }

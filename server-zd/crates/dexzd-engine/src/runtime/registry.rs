@@ -293,20 +293,7 @@ impl FlowRuntimeRegistry {
     /// Stops serving: every pending and future operation fails with `NodeStopping`, and every
     /// long poll ends. The node owner watches [`Self::halted`] and exits.
     pub fn halt(&self, reason: String) {
-        {
-            let mut halt_reason = self
-                .inner
-                .halt_reason
-                .lock()
-                .expect("halt reason lock is poisoned only if a holder panicked");
-            if halt_reason.is_none() {
-                tracing::error!(reason = %reason, "flow runtime registry halted");
-                *halt_reason = Some(reason);
-            }
-        }
-        self.inner.halted.cancel();
-        self.inner.waiters.close();
-        self.inner.capacity_released.notify_waiters();
+        self.inner.halt(reason);
     }
 
     /// Ends every long poll with `Unavailable` and rejects new ones, for a graceful stop.
@@ -361,6 +348,9 @@ impl FlowRuntimeRegistry {
                 Err(error) => Some(Err(error)),
             };
             if let Some(proposal) = proposal {
+                if let Ok(Some((result, _))) = &proposal {
+                    self.observe_commit_failure(flow, &result.ticket);
+                }
                 if let Ok(Some((result, _))) = &proposal
                     && urgency == CommitUrgency::Batched
                 {
@@ -385,6 +375,20 @@ impl FlowRuntimeRegistry {
                 () = self.inner.halted.cancelled() => return Err(self.inner.halted_error()),
             }
         }
+    }
+
+    /// Halts the registry when the ticket's commit fails, whether or not a caller waits for it.
+    fn observe_commit_failure(&self, flow: &FlowAddress, ticket: &CommitTicket) {
+        let inner = Arc::downgrade(&self.inner);
+        let flow_id = flow.flow_id.clone();
+        ticket.observe_failure(Box::new(move |error| {
+            // A registry that is already gone serves nothing.
+            if let Some(inner) = inner.upgrade() {
+                inner.halt(format!(
+                    "commit of a command of Flow {flow_id} failed: {error}"
+                ));
+            }
+        }));
     }
 
     /// Returns [`Admission::AtCapacity`] when the Flow or the node is at its speculation limit;
@@ -413,6 +417,7 @@ impl FlowRuntimeRegistry {
             return Ok(Admission::Decided(None));
         };
         let command = self.resolve_child_start(command);
+        self.check_running()?;
         // Reserve before submit, which cannot be undone; the outcome's size is added after apply.
         let reserved_bytes = command.encoded_len();
         if !self.inner.try_reserve_bytes(reserved_bytes) {
@@ -639,12 +644,14 @@ impl RegistryInner {
 
     /// Reserves `bytes` of the node's speculation budget in one atomic step.
     ///
-    /// Returns false when the reservation would exceed the limit while other bytes are held.
+    /// Returns false while retained bytes are at or over the limit, or when the reservation would
+    /// exceed it while other bytes are held.
     fn try_reserve_bytes(&self, bytes: usize) -> bool {
         let limit = self.config.max_speculative_bytes_per_node;
         self.uncommitted_bytes
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (current == 0 || current.saturating_add(bytes) <= limit).then(|| current + bytes)
+                let is_within_limit = current < limit && current.saturating_add(bytes) <= limit;
+                (current == 0 || is_within_limit).then(|| current + bytes)
             })
             .is_ok()
     }
@@ -661,6 +668,22 @@ impl RegistryInner {
 
     fn release_bytes(&self, bytes: usize) {
         self.uncommitted_bytes.fetch_sub(bytes, Ordering::AcqRel);
+        self.capacity_released.notify_waiters();
+    }
+
+    fn halt(&self, reason: String) {
+        {
+            let mut halt_reason = self
+                .halt_reason
+                .lock()
+                .expect("halt reason lock is poisoned only if a holder panicked");
+            if halt_reason.is_none() {
+                tracing::error!(reason = %reason, "flow runtime registry halted");
+                *halt_reason = Some(reason);
+            }
+        }
+        self.halted.cancel();
+        self.waiters.close();
         self.capacity_released.notify_waiters();
     }
 

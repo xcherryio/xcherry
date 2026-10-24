@@ -10,6 +10,7 @@
 
 use std::time::Duration;
 
+use dexzd_apply::read_model::{ReadModelError, StepCompletionState, step_completion_state};
 use dexzd_apply::{ApplyContext, FlowStateReader};
 use dexzd_keyspace::{ColumnFamily, RunTable, TenantId, run_key};
 use dexzd_protocol::dex::{
@@ -18,9 +19,7 @@ use dexzd_protocol::dex::{
     WaitForFlowRequest, WaitForHistoryEventRequest, WaitForHistoryEventResponse,
     WaitForStepCompletionRequest, WaitForStepCompletionResponse, value,
 };
-use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, StepExecutionPhase, StepExecutionRecord, stored_value,
-};
+use dexzd_protocol::dexzd::v1::{AttributeRecord, stored_value};
 use dexzd_request_validation::{ClientRequest, validate_client_request};
 use tokio::time::Instant;
 
@@ -102,33 +101,27 @@ impl FlowRuntimeRegistry {
         let deadline = self.request_deadline(request.request_timeout_seconds);
         self.long_poll(
             &flow,
-            WaitInterest::StepExecution(step_execution_id.clone()),
+            WaitInterest::StepExecution(step_execution_id),
             &deadline,
             "step completion is still pending; poll again",
             |state, context| {
                 let run = read_run(state, context, &flow, "")?;
-                let step: Option<StepExecutionRecord> = decode_row(
+                let completion = step_completion_state(
                     state,
-                    ColumnFamily::Flow,
-                    &run_key(
-                        context.flow_hash,
-                        run.run_id,
-                        RunTable::StepExecution,
-                        step_execution_id.as_bytes(),
-                    ),
-                    "Step execution",
-                )?;
-                let is_finished = step.is_some_and(|step| {
-                    step.phase == StepExecutionPhase::Completed as i32
-                        || step.phase == StepExecutionPhase::Canceled as i32
-                });
-                if is_finished {
-                    return Ok(Some(WaitForStepCompletionResponse {}));
+                    context.flow_hash,
+                    run.run_id,
+                    &request.step_type,
+                    step_execution_number,
+                )
+                .map_err(|error| read_model_error(&flow, error))?;
+                match completion {
+                    StepCompletionState::Completed => Ok(Some(WaitForStepCompletionResponse {})),
+                    StepCompletionState::NotCompleted => Ok(None),
+                    // Go reports a wait on a closed Flow as a missing Flow.
+                    StepCompletionState::EndedWithoutCompletion => {
+                        Err(RuntimeError::flow_not_found(&flow.flow_id))
+                    }
                 }
-                if is_closed_status(run.record.status) {
-                    return Err(RuntimeError::flow_not_found(&flow.flow_id));
-                }
-                Ok(None)
             },
         )
         .await
@@ -413,4 +406,16 @@ fn attribute_precondition(message: impl Into<String>) -> RuntimeError {
         ErrorSubStatus::Uncategorized,
         message,
     )
+}
+
+/// Maps a read-model error of a long poll to the client error Go returns.
+fn read_model_error(flow: &FlowAddress, error: ReadModelError) -> RuntimeError {
+    match error {
+        ReadModelError::RunNotFound { .. } => RuntimeError::flow_not_found(&flow.flow_id),
+        ReadModelError::InvalidRequest { detail } => RuntimeError::invalid_argument(detail),
+        ReadModelError::State(error) => error.into(),
+        error @ ReadModelError::UnsupportedAttributeValue { .. } => RuntimeError::Internal {
+            detail: error.to_string(),
+        },
+    }
 }

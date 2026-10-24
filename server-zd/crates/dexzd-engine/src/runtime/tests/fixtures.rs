@@ -6,7 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use dexzd_keyspace::{RunId, TenantId};
+use dexzd_apply::{ApplyOutcome, StateWrite};
+use dexzd_keyspace::{ColumnFamily, RunId, TenantId};
 use dexzd_protocol::dex::{
     AttributeWrite, FlowConfig, FlowStartOptions, SetAttributesRequest, StartFlowRequest, Value,
     WorkerTarget, value,
@@ -16,6 +17,7 @@ use dexzd_protocol::dexzd::v1::{
     flow_command,
 };
 
+use crate::runtime::tests::model_applier::ok_reply;
 use crate::runtime::tests::test_support::RuntimeHarness;
 use crate::runtime::{FlowAddress, RuntimeError};
 
@@ -124,4 +126,21 @@ pub(crate) async fn start_flow(
         .drive(harness.registry.start_flow(TENANT, start_request(flow_id)))
         .await?;
     Ok(response.run_id.parse().unwrap())
+}
+
+/// Size of the value that [`large_outcome`] writes.
+pub(crate) const LARGE_OUTCOME_VALUE_BYTES: usize = 64 * 1024;
+
+/// An outcome far larger than the command that produced it.
+pub(crate) fn large_outcome(run_id: RunId) -> ApplyOutcome {
+    ApplyOutcome {
+        writes: vec![StateWrite::Put {
+            column_family: ColumnFamily::Flow,
+            key: b"large-outcome".to_vec(),
+            value: vec![0; LARGE_OUTCOME_VALUE_BYTES],
+        }],
+        effects: Vec::new(),
+        reply: ok_reply(),
+        run_id: Some(run_id),
+    }
 }

@@ -8,15 +8,15 @@
 
 use std::time::Duration;
 
-use dexzd_keyspace::{ColumnFamily, RunTable, run_key};
+use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
 use dexzd_protocol::dex::{
     AttributeMatch, AttributeMatchOperator, ErrorSubStatus, FlowStatus, StopFlowRequest,
     WaitForAttributeRequest, WaitForFlowRequest, WaitForHistoryEventRequest,
     WaitForStepCompletionRequest,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, FlowCommand, FlowStopCommand, StepExecutionPhase, StepExecutionRecord,
-    StoredValue, StoredValueReference, flow_command, stored_value,
+    AttributeRecord, FlowCommand, FlowStopCommand, StepCounterRecord, StepExecutionPhase,
+    StepExecutionRecord, StoredValue, StoredValueReference, flow_command, stored_value,
 };
 use prost::Message;
 
@@ -218,7 +218,7 @@ async fn wait_for_step_completion_distinguishes_request_and_call_timeouts() {
         ..RuntimeConfig::default()
     };
     let harness = RuntimeHarness::with_config(&config);
-    let run_id = start_flow(&harness, "order-1").await.unwrap();
+    start_flow(&harness, "order-1").await.unwrap();
     let request = |request_timeout_seconds| WaitForStepCompletionRequest {
         flow_id: "order-1".to_owned(),
         step_type: "Approve".to_owned(),
@@ -238,8 +238,18 @@ async fn wait_for_step_completion_distinguishes_request_and_call_timeouts() {
         .await
         .unwrap_err();
     assert_eq!(error.sub_status(), ErrorSubStatus::LongPollTimeOut);
+}
 
+fn put_approve_step(harness: &RuntimeHarness, run_id: RunId, phase: StepExecutionPhase) {
     let context = harness.registry.flow_context(&flow("order-1"));
+    harness.store.put(
+        ColumnFamily::Flow,
+        run_key(context.flow_hash, run_id, RunTable::StepCounter, b"Approve"),
+        StepCounterRecord {
+            last_step_number: 1,
+        }
+        .encode_to_vec(),
+    );
     harness.store.put(
         ColumnFamily::Flow,
         run_key(
@@ -250,16 +260,65 @@ async fn wait_for_step_completion_distinguishes_request_and_call_timeouts() {
         ),
         StepExecutionRecord {
             step_execution_id: "Approve-1".to_owned(),
-            phase: StepExecutionPhase::Canceled as i32,
+            phase: phase as i32,
             ..StepExecutionRecord::default()
         }
         .encode_to_vec(),
     );
+}
+
+fn approve_step_request() -> WaitForStepCompletionRequest {
+    WaitForStepCompletionRequest {
+        flow_id: "order-1".to_owned(),
+        step_type: "Approve".to_owned(),
+        step_execution_number: "1".to_owned(),
+        ..WaitForStepCompletionRequest::default()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_for_step_completion_succeeds_only_for_a_completed_step() {
+    let harness = RuntimeHarness::new();
+    let run_id = start_flow(&harness, "order-1").await.unwrap();
+    put_approve_step(&harness, run_id, StepExecutionPhase::Canceled);
+    let error = harness
+        .registry
+        .wait_for_step_completion(TENANT, approve_step_request())
+        .await
+        .unwrap_err();
+    assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
+    assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
+
+    put_approve_step(&harness, run_id, StepExecutionPhase::Completed);
     harness
         .registry
-        .wait_for_step_completion(TENANT, request(0))
+        .wait_for_step_completion(TENANT, approve_step_request())
         .await
         .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_for_step_completion_on_a_closed_flow_reports_a_missing_flow() {
+    let harness = RuntimeHarness::new();
+    start_flow(&harness, "order-1").await.unwrap();
+    let wait = harness
+        .registry
+        .wait_for_step_completion(TENANT, approve_step_request());
+    tokio::pin!(wait);
+    assert_pending(wait.as_mut()).await;
+    harness
+        .drive(harness.registry.stop_flow(
+            TENANT,
+            StopFlowRequest {
+                flow_id: "order-1".to_owned(),
+                ..StopFlowRequest::default()
+            },
+        ))
+        .await
+        .unwrap();
+    let error = wait.await.unwrap_err();
+    assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
+    assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
 }
 
 #[tokio::test(start_paused = true)]

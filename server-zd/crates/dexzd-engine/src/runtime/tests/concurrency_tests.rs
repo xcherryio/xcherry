@@ -16,9 +16,10 @@ use dexzd_keyspace::{ColumnFamily, RunId, RunTable, run_key};
 use dexzd_protocol::dexzd::v1::LockRecord;
 use prost::Message;
 
+use crate::runtime::speculative_overlay::OverlayEntry;
 use crate::runtime::tests::fixtures::{
-    attributes_set_command, flow, int_value, locking_attempt_command, locking_invocation,
-    start_flow,
+    attributes_set_command, flow, int_value, large_outcome, locking_attempt_command,
+    locking_invocation, start_flow,
 };
 use crate::runtime::tests::test_support::RuntimeHarness;
 use crate::runtime::{CommitUrgency, PendingInvocation, RuntimeConfig, RuntimeError, grpc_code};
@@ -215,4 +216,97 @@ fn concurrent_proposals_on_different_flows_cannot_overrun_the_node_byte_limit() 
         );
     }
     assert_eq!(harness.committer.pending_count(), 1);
+}
+
+#[test]
+fn concurrent_small_commands_overshoot_by_at_most_one_outcome_per_flow() {
+    const FLOW_COUNT: usize = 4;
+    let config = RuntimeConfig {
+        max_speculative_bytes_per_node: 4096,
+        speculation_capacity_wait: Duration::from_millis(50),
+        ..RuntimeConfig::default()
+    };
+    let harness = Arc::new(RuntimeHarness::with_config(&config));
+    let setup = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let run_ids: Vec<RunId> = (0..FLOW_COUNT)
+        .map(|index| {
+            setup
+                .block_on(start_flow(&harness, &format!("order-{index}")))
+                .unwrap()
+        })
+        .collect();
+    let mut scripted = harness.applier.scripted.lock().unwrap();
+    for run_id in &run_ids {
+        scripted.push_back(Ok(large_outcome(*run_id)));
+    }
+    drop(scripted);
+    let rendezvous = Arc::new(ApplyRendezvous {
+        arrivals: Mutex::new(0),
+        arrived: Condvar::new(),
+        expected: FLOW_COUNT,
+    });
+    *harness.applier.apply_hook.lock().unwrap() = Some({
+        let rendezvous = Arc::clone(&rendezvous);
+        Arc::new(move || rendezvous.wait())
+    });
+
+    let proposers: Vec<_> = run_ids
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, run_id)| {
+            let harness = Arc::clone(&harness);
+            std::thread::spawn(move || {
+                let flow_id = format!("order-{index}");
+                let command = attributes_set_command(&flow_id, run_id, "count", int_value(1));
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap()
+                    .block_on(harness.registry.propose(
+                        flow(&flow_id),
+                        command,
+                        CommitUrgency::Batched,
+                    ))
+                    .map(drop)
+            })
+        })
+        .collect();
+    let results: Vec<Result<(), RuntimeError>> = proposers
+        .into_iter()
+        .map(|proposer| proposer.join().unwrap())
+        .collect();
+    *harness.applier.apply_hook.lock().unwrap() = None;
+
+    assert!(results.iter().all(Result::is_ok), "{results:?}");
+    let limit = config.max_speculative_bytes_per_node;
+    let largest_entry_bytes = harness
+        .submitted()
+        .iter()
+        .rev()
+        .take(FLOW_COUNT)
+        .map(|command| OverlayEntry::new(command, large_outcome(run_ids[0])).size_bytes)
+        .max()
+        .unwrap();
+    let retained = harness.registry.uncommitted_bytes();
+    assert!(retained > limit, "{retained}");
+    assert!(
+        retained <= limit + FLOW_COUNT * largest_entry_bytes,
+        "{retained}"
+    );
+
+    let error = setup
+        .block_on(harness.registry.propose(
+            flow("order-0"),
+            attributes_set_command("order-0", run_ids[0], "count", int_value(2)),
+            CommitUrgency::Batched,
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(error, RuntimeError::Unavailable { .. }),
+        "{error:?}"
+    );
 }

@@ -301,6 +301,8 @@ impl FlowRuntimeRegistry {
     ) -> Result<CommittedCommand, RuntimeError> {
         let halted = self.halted();
         let result = tokio::select! {
+            // The failure observer halts before the ticket resolves; report the commit error.
+            biased;
             result = ticket.wait() => result,
             () = halted.cancelled() => {
                 return Err(self.check_running().expect_err("halted"));

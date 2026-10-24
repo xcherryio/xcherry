@@ -21,11 +21,13 @@ pub struct RuntimeConfig {
     pub max_speculative_commands_per_flow: usize,
     /// Largest number of uncommitted bytes (queued commands plus their speculative writes, keys,
     /// values, effects, and replies) across every overlay of the node. Default 64 MiB. Enforced
-    /// like `max_speculative_commands_per_flow`; a single command larger than the limit is
-    /// admitted only when no other bytes are uncommitted. Each proposal atomically reserves its
-    /// command's size before it is submitted and adds its outcome's size after the speculative
-    /// apply, so the total can exceed the limit by at most the outcomes of proposals running at
-    /// that moment (one per proposing thread).
+    /// like `max_speculative_commands_per_flow`: admission rejects a new proposal while the
+    /// retained bytes are at or over the limit, or when its command would push them over it. A
+    /// single command larger than the limit is admitted only when no other bytes are
+    /// uncommitted. Each proposal atomically reserves its command's size before it is submitted
+    /// and adds its outcome's size after the speculative apply, so this is a soft limit: the
+    /// total can exceed it by at most one outcome per concurrently proposing Flow (proposals of
+    /// one Flow are serialized), plus that single oversized command.
     pub max_speculative_bytes_per_node: usize,
     /// How long a proposal waits for speculation capacity before it fails with `Unavailable`.
     /// Default 5 s.

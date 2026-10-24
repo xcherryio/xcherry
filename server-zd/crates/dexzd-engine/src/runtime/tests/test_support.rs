@@ -8,7 +8,7 @@
 
 //! Test doubles: an in-memory committed store, a fake commit pipeline, and recording sinks.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -294,6 +294,8 @@ pub(crate) struct RuntimeHarness {
     pub(crate) rpc_invoker: Arc<FakeRpcInvoker>,
     pub(crate) hard_delete_reader: Arc<FakeHardDeleteReader>,
     pub(crate) tamper: Mutex<Option<OutcomeTamper>>,
+    /// Partitions whose commit failed; like the real pipeline, they persist nothing afterwards.
+    failed_partitions: Mutex<BTreeSet<PartitionId>>,
 }
 
 impl RuntimeHarness {
@@ -332,6 +334,7 @@ impl RuntimeHarness {
             rpc_invoker,
             hard_delete_reader,
             tamper: Mutex::new(None),
+            failed_partitions: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -341,6 +344,17 @@ impl RuntimeHarness {
         let Some(pending) = self.committer.take_next() else {
             return false;
         };
+        if self
+            .failed_partitions
+            .lock()
+            .unwrap()
+            .contains(&pending.context.partition)
+        {
+            pending.sender.resolve(Err(CommitError::NodeStopping {
+                detail: "partition stopped after a commit failure".to_owned(),
+            }));
+            return true;
+        }
         let view = self.store.view();
         let mut outcome = self
             .applier
@@ -375,13 +389,28 @@ impl RuntimeHarness {
         count
     }
 
-    /// Fails the oldest pending command's ticket without committing it.
+    /// Fails the oldest pending command's ticket without committing it; its partition stops.
     pub(crate) fn fail_next(&self, error: CommitError) -> bool {
         let Some(pending) = self.committer.take_next() else {
             return false;
         };
+        self.stop_partition(pending.context.partition);
         pending.sender.resolve(Err(error));
         true
+    }
+
+    /// Drops the oldest pending command's ticket unresolved; its partition stops.
+    pub(crate) fn drop_next(&self) -> bool {
+        let Some(pending) = self.committer.take_next() else {
+            return false;
+        };
+        self.stop_partition(pending.context.partition);
+        drop(pending);
+        true
+    }
+
+    fn stop_partition(&self, partition: PartitionId) {
+        self.failed_partitions.lock().unwrap().insert(partition);
     }
 
     /// Runs `operation` while committing every command it submits.
