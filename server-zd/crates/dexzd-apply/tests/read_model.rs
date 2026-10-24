@@ -2285,7 +2285,7 @@ fn method_context_keeps_durability_from_the_method_schedule() {
 }
 
 #[test]
-fn retried_method_contexts_keep_the_previous_failure_and_first_start() {
+fn retried_method_contexts_keep_the_previous_failure_and_final_start() {
     let mut harness = Harness::new();
     harness.start(
         FlowStartOptions::default(),
@@ -2347,6 +2347,7 @@ fn retried_method_contexts_keep_the_previous_failure_and_first_start() {
     harness.apply(failure_command(StepMethod::WaitFor, 1, "wait retry"));
     harness.apply(retry_timer(StepMethod::WaitFor));
     harness.apply(start_second_attempt(StepMethod::WaitFor));
+    let wait_for_retry_started_at = harness.now_micros;
     harness.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
         invocation: Some(invocation_key(StepMethod::WaitFor)),
         attempt: 2,
@@ -2362,6 +2363,7 @@ fn retried_method_contexts_keep_the_previous_failure_and_first_start() {
     harness.apply(failure_command(StepMethod::Execute, 1, "execute retry"));
     harness.apply(retry_timer(StepMethod::Execute));
     harness.apply(start_second_attempt(StepMethod::Execute));
+    let execute_retry_started_at = harness.now_micros;
     harness.apply(failure_command(StepMethod::Execute, 2, "execute final"));
     let execute_failed_at = harness.now_micros;
 
@@ -2386,20 +2388,31 @@ fn retried_method_contexts_keep_the_previous_failure_and_first_start() {
     assert_eq!(wait_for_context.step_type, "ChargeStep");
     assert_eq!(wait_for_context.durability, StepDurability::Sync as i32);
     assert_eq!(wait_for_context.final_attempt, 2);
+    assert_ne!(wait_for_started_at, wait_for_retry_started_at);
     assert_eq!(
         wait_for_context.started_time,
-        Some(test_timestamp(wait_for_started_at))
+        Some(test_timestamp(wait_for_retry_started_at))
     );
     assert_eq!(
         wait_for_context.duration,
-        Some(test_duration(wait_for_started_at, wait_for_completed_at))
+        Some(test_duration(
+            wait_for_retry_started_at,
+            wait_for_completed_at
+        ))
     );
     assert_eq!(
         wait_for_context.method_options,
         Some(expected_default_method_options(2))
     );
     let wait_for_failure = wait_for_context.last_failure_info.as_ref().unwrap();
-    assert_eq!(wait_for_failure.backend_error, "wait retry");
+    assert_eq!(
+        wait_for_failure
+            .details
+            .as_ref()
+            .unwrap()
+            .original_worker_error_detail,
+        "wait retry"
+    );
     assert_eq!(wait_for_failure.attempt, 1);
     assert_eq!(
         wait_for_failure.pull_routing,
@@ -2416,20 +2429,28 @@ fn retried_method_contexts_keep_the_previous_failure_and_first_start() {
     assert_eq!(execute_context.step_type, "ChargeStep");
     assert_eq!(execute_context.durability, StepDurability::Sync as i32);
     assert_eq!(execute_context.final_attempt, 2);
+    assert_ne!(execute_started_at, execute_retry_started_at);
     assert_eq!(
         execute_context.started_time,
-        Some(test_timestamp(execute_started_at))
+        Some(test_timestamp(execute_retry_started_at))
     );
     assert_eq!(
         execute_context.duration,
-        Some(test_duration(execute_started_at, execute_failed_at))
+        Some(test_duration(execute_retry_started_at, execute_failed_at))
     );
     assert_eq!(
         execute_context.method_options,
         Some(expected_default_method_options(2))
     );
     let previous_failure = execute_context.last_failure_info.as_ref().unwrap();
-    assert_eq!(previous_failure.backend_error, "execute retry");
+    assert_eq!(
+        previous_failure
+            .details
+            .as_ref()
+            .unwrap()
+            .original_worker_error_detail,
+        "execute retry"
+    );
     assert_eq!(previous_failure.attempt, 1);
     assert_eq!(
         previous_failure.pull_routing,
@@ -2440,25 +2461,23 @@ fn retried_method_contexts_keep_the_previous_failure_and_first_start() {
         Some(failure_routing("execute final"))
     );
     let final_failure = execute.output.as_ref().unwrap().failure.as_ref().unwrap();
-    assert_eq!(final_failure.backend_error, "execute final");
+    assert_eq!(
+        final_failure
+            .details
+            .as_ref()
+            .unwrap()
+            .original_worker_error_detail,
+        "execute final"
+    );
     assert_eq!(final_failure.attempt, 2);
 }
 
 #[test]
-fn pending_retry_context_reports_the_last_started_attempt() {
+fn exhausted_first_attempt_has_no_previous_failure_in_history_context() {
     let mut harness = Harness::new();
-    harness.start(
-        FlowStartOptions::default(),
-        Some(StepOptions {
-            wait_for_retry_policy: Some(RetryPolicy {
-                maximum_attempts: 3,
-                ..RetryPolicy::default()
-            }),
-            ..StepOptions::default()
-        }),
-    );
+    harness.start(FlowStartOptions::default(), None);
     harness.start_attempt(StepMethod::WaitFor);
-    let first_started_at = harness.now_micros;
+    let started_at = harness.now_micros;
     harness.apply(Command::StepAttemptFailed(StepAttemptFailedCommand {
         invocation: Some(StepInvocationKey {
             step_execution_id: "ChargeStep-1".to_owned(),
@@ -2466,13 +2485,13 @@ fn pending_retry_context_reports_the_last_started_attempt() {
         }),
         attempt: 1,
         kind: StepAttemptFailureKind::WorkerError as i32,
+        is_non_retryable: true,
         worker_error: Some(WorkerErrorResponse {
-            detail: "retry later".to_owned(),
+            detail: "first failure".to_owned(),
             ..WorkerErrorResponse::default()
         }),
         ..StepAttemptFailedCommand::default()
     }));
-    harness.stop();
     let events = get_history_events(
         &harness.state,
         harness.context.flow_hash,
@@ -2484,32 +2503,134 @@ fn pending_retry_context_reports_the_last_started_attempt() {
     )
     .unwrap()
     .events;
-    let Some(flow_history_event::Payload::StepWaitForPending(pending)) = &events[1].payload else {
-        panic!("retry pending event exists");
+    let Some(flow_history_event::Payload::StepWaitForFailed(failed)) = &events[1].payload else {
+        panic!("first attempt failure event exists");
     };
-    assert_eq!(
-        pending.phase,
-        dexzd_protocol::dex::PendingStepMethodPhase::Scheduled as i32
-    );
-    let context = pending.context.as_ref().unwrap();
-    assert_eq!(context.step_execution_id, "ChargeStep-1");
-    assert_eq!(context.from_step_execution_id, "");
-    assert_eq!(context.step_type, "ChargeStep");
-    assert_eq!(context.durability, StepDurability::Sync as i32);
+    let context = failed.context.as_ref().unwrap();
     assert_eq!(context.final_attempt, 1);
-    assert_eq!(context.started_time, Some(test_timestamp(first_started_at)));
+    assert_eq!(context.started_time, Some(test_timestamp(started_at)));
     assert_eq!(
         context.duration,
-        Some(test_duration(first_started_at, harness.now_micros))
+        Some(test_duration(started_at, harness.now_micros))
     );
+    assert!(context.last_failure_info.is_none());
+    let failure = failed.output.as_ref().unwrap().failure.as_ref().unwrap();
+    assert_eq!(failure.attempt, 1);
     assert_eq!(
-        context.method_options,
-        Some(expected_default_method_options(3))
+        failure
+            .details
+            .as_ref()
+            .unwrap()
+            .original_worker_error_detail,
+        "first failure"
     );
-    let previous_failure = context.last_failure_info.as_ref().unwrap();
-    assert_eq!(previous_failure.backend_error, "retry later");
-    assert_eq!(previous_failure.attempt, 1);
-    assert!(context.pull_routing.is_none());
+}
+
+#[test]
+fn pending_retry_context_reports_the_last_started_attempt() {
+    for is_retry_running in [false, true] {
+        let mut harness = Harness::new();
+        harness.start(
+            FlowStartOptions::default(),
+            Some(StepOptions {
+                wait_for_retry_policy: Some(RetryPolicy {
+                    maximum_attempts: 3,
+                    ..RetryPolicy::default()
+                }),
+                ..StepOptions::default()
+            }),
+        );
+        let first_attempt_at = harness.now_micros;
+        harness.start_attempt(StepMethod::WaitFor);
+        let invocation = StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::WaitFor as i32,
+        };
+        harness.apply(Command::StepAttemptFailed(StepAttemptFailedCommand {
+            invocation: Some(invocation.clone()),
+            attempt: 1,
+            kind: StepAttemptFailureKind::WorkerError as i32,
+            worker_error: Some(WorkerErrorResponse {
+                detail: "retry later".to_owned(),
+                ..WorkerErrorResponse::default()
+            }),
+            ..StepAttemptFailedCommand::default()
+        }));
+        harness.apply(Command::TimersFired(TimersFiredCommand {
+            timers: vec![TimerId {
+                run_attempt: 1,
+                kind: Some(timer_id::Kind::RetryBackoff(RetryBackoffTimerId {
+                    invocation: Some(invocation.clone()),
+                    next_attempt: 2,
+                })),
+            }],
+        }));
+        if is_retry_running {
+            harness.apply(Command::StepAttemptStarted(StepAttemptStartedCommand {
+                invocation: Some(invocation),
+                attempt: 2,
+                task_id: vec![3; 16],
+            }));
+        }
+        let expected_started_at = if is_retry_running {
+            harness.now_micros
+        } else {
+            first_attempt_at
+        };
+        harness.stop();
+        let events = get_history_events(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            0,
+            0,
+            &[],
+            0,
+        )
+        .unwrap()
+        .events;
+        let Some(flow_history_event::Payload::StepWaitForPending(pending)) = &events[1].payload
+        else {
+            panic!("retry pending event exists");
+        };
+        assert_eq!(
+            pending.phase,
+            if is_retry_running {
+                dexzd_protocol::dex::PendingStepMethodPhase::Started as i32
+            } else {
+                dexzd_protocol::dex::PendingStepMethodPhase::Scheduled as i32
+            }
+        );
+        let context = pending.context.as_ref().unwrap();
+        assert_eq!(context.step_execution_id, "ChargeStep-1");
+        assert_eq!(context.from_step_execution_id, "");
+        assert_eq!(context.step_type, "ChargeStep");
+        assert_eq!(context.durability, StepDurability::Sync as i32);
+        assert_eq!(context.final_attempt, if is_retry_running { 2 } else { 1 });
+        assert_eq!(
+            context.started_time,
+            Some(test_timestamp(expected_started_at))
+        );
+        assert_eq!(
+            context.duration,
+            Some(test_duration(expected_started_at, harness.now_micros))
+        );
+        assert_eq!(
+            context.method_options,
+            Some(expected_default_method_options(3))
+        );
+        let previous_failure = context.last_failure_info.as_ref().unwrap();
+        assert_eq!(
+            previous_failure
+                .details
+                .as_ref()
+                .unwrap()
+                .original_worker_error_detail,
+            "retry later"
+        );
+        assert_eq!(previous_failure.attempt, 1);
+        assert!(context.pull_routing.is_none());
+    }
 }
 
 fn expected_default_method_options(maximum_attempts: i32) -> StepMethodOptions {

@@ -25,6 +25,10 @@ use crate::ApplyError;
 use crate::command_handlers::run_cursor::{RunCursor, timestamp};
 use crate::state_access::FlowTransaction;
 use crate::steps::wait_conditions::wire_condition_results;
+use crate::steps::{
+    DEFAULT_BACKOFF_COEFFICIENT, DEFAULT_INITIAL_INTERVAL_SECONDS,
+    DEFAULT_MAXIMUM_INTERVAL_SECONDS, DEFAULT_TOTAL_DURATION_SECONDS,
+};
 use crate::values::wire_value;
 
 const DEFAULT_METHOD_TIMEOUT_SECONDS: i32 = 2 * 60 * 60;
@@ -128,8 +132,8 @@ fn method_context(
     attempt: u32,
     event_at_micros: i64,
 ) -> StepMethodEventContext {
-    let started_at_micros = if invocation.first_started_at_micros > 0 {
-        invocation.first_started_at_micros
+    let started_at_micros = if invocation.attempt_started_at_micros > 0 {
+        invocation.attempt_started_at_micros
     } else {
         invocation.first_attempt_at_micros
     };
@@ -183,17 +187,17 @@ fn effective_method_options(step: &StepExecutionRecord, method: StepMethod) -> S
 
 fn effective_retry_policy(policy: Option<&RetryPolicy>) -> RetryPolicy {
     let mut effective = policy.cloned().unwrap_or_default();
-    if effective.initial_interval_seconds == 0 {
-        effective.initial_interval_seconds = 1;
+    if effective.initial_interval_seconds <= 0 {
+        effective.initial_interval_seconds = DEFAULT_INITIAL_INTERVAL_SECONDS as i32;
     }
-    if effective.backoff_coefficient == 0.0 {
-        effective.backoff_coefficient = 2.0;
+    if effective.backoff_coefficient <= 0.0 || effective.backoff_coefficient.is_nan() {
+        effective.backoff_coefficient = DEFAULT_BACKOFF_COEFFICIENT as f32;
     }
-    if effective.maximum_interval_seconds == 0 {
-        effective.maximum_interval_seconds = 100;
+    if effective.maximum_interval_seconds <= 0 {
+        effective.maximum_interval_seconds = DEFAULT_MAXIMUM_INTERVAL_SECONDS as i32;
     }
-    if effective.total_duration_seconds == 0 {
-        effective.total_duration_seconds = 4 * 60 * 60;
+    if effective.total_duration_seconds <= 0 {
+        effective.total_duration_seconds = DEFAULT_TOTAL_DURATION_SECONDS as i32;
     }
     effective
 }

@@ -90,9 +90,6 @@ pub(crate) fn make_invocation_pending(
         first_attempt_at_micros,
         pending_since_seq: cursor.seq,
         lock_keys,
-        first_started_at_micros: previous
-            .as_ref()
-            .map_or(0, |invocation| invocation.first_started_at_micros),
         effective_durability,
         last_failure: previous
             .as_ref()
@@ -203,9 +200,6 @@ pub(crate) fn start_attempt(
     invocation.phase = StepInvocationPhase::Running as i32;
     invocation.task_id = task_id.to_vec();
     invocation.attempt_started_at_micros = now_micros;
-    if invocation.first_started_at_micros == 0 {
-        invocation.first_started_at_micros = now_micros;
-    }
     let run_id = cursor.run_id();
     let run_attempt = cursor.attempt();
     let attempt = invocation.attempt;

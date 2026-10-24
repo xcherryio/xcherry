@@ -275,8 +275,6 @@ message StepInvocationRecord {
   StoredValue heartbeat_checkpoint = 11;
   int64 backoff_fires_at_micros = 12;
   dex.PullRouting pull_routing = 13;
-  // First actual start across retries; zero before any attempt starts.
-  int64 first_started_at_micros = 14;
   // Resolved at method scheduling and kept across retries.
   dex.StepDurability effective_durability = 15;
 }
