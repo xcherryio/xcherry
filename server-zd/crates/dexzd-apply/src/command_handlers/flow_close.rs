@@ -88,7 +88,7 @@ pub(crate) fn close_flow(
     let should_record_pending = matches!(
         closing.status,
         FlowStatus::Canceled | FlowStatus::Terminated | FlowStatus::ServerSideTimeoutInternalOnly
-    ) || closing.error_type == FlowErrorType::FlowTimeout;
+    );
     for (_, mut step) in steps {
         if is_active(&step) {
             if scope.behavior_version.has_close_pending_history()

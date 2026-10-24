@@ -27,18 +27,19 @@ use dexzd_keyspace::{ColumnFamily, IndexKind, PartitionHasher, RunId, RunTable, 
 use dexzd_protocol::dex::{
     ActionPermissionMapping, ActionPermissionMappings, AttributeMatch, AttributeMatchOperator,
     AttributeWrite, ChannelMessage, CloseDecision, CloseDecisionType, ConditionStatus, FlowConfig,
-    FlowStartOptions, FlowStatus, IndexConfig, IndexType, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, LoadBlobRequestEntry, PublishToChannelRequest,
-    SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions,
-    StopFlowRequest, StopType, TimerResult, UpdateFlowConfigRequest, Value, WorkerTarget,
-    flow_history_event, value,
+    FlowStartOptions, FlowStatus, FlowTimeoutPolicy, IndexConfig, IndexType,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, LoadBlobRequestEntry,
+    PublishToChannelRequest, SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement,
+    StepOptions, StopFlowRequest, StopType, TimerResult, UpdateFlowConfigRequest, Value,
+    WorkerErrorResponse, WorkerTarget, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributesSetCommand, ChannelPublishCommand, ConditionResultsRecord, FlowCommand,
-    FlowConfigUpdateCommand, FlowStartCommand, FlowStopCommand, HardDeleteObjectReference,
-    RunRecord, RunSettings, StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey,
-    StepMethod, StepMethodCompletedCommand, StoredFlowResult, flow_command::Command,
-    step_method_completed_command,
+    FlowConfigUpdateCommand, FlowStartCommand, FlowStopCommand, FlowTimeoutTimerId,
+    HardDeleteObjectReference, RunRecord, RunSettings, StepAttemptFailedCommand,
+    StepAttemptStartedCommand, StepExecutionRecord, StepInvocationKey, StepMethod,
+    StepMethodCompletedCommand, StoredFlowResult, TimerId, TimersFiredCommand,
+    flow_command::Command, step_method_completed_command, timer_id,
 };
 use prost::Message;
 
@@ -162,12 +163,22 @@ impl Harness {
     }
 
     fn start(&mut self, options: FlowStartOptions, step_options: Option<StepOptions>) {
+        self.start_with_timeout(options, step_options, 0);
+    }
+
+    fn start_with_timeout(
+        &mut self,
+        options: FlowStartOptions,
+        step_options: Option<StepOptions>,
+        flow_timeout_seconds: i32,
+    ) {
         let request = StartFlowRequest {
             flow_id: self.flow_id.clone(),
             flow_type: "OrderFlow".to_owned(),
             start_step_type: "ChargeStep".to_owned(),
             step_input: Some(string_value("input")),
             step_options,
+            flow_timeout_seconds,
             request_id: "start-1".to_owned(),
             flow_start_options: Some(options),
             ..StartFlowRequest::default()
@@ -182,6 +193,7 @@ impl Harness {
                 request_dedup_capacity: 1000,
                 ..RunSettings::default()
             }),
+            resolved_timeout_policy: FlowTimeoutPolicy::Fail as i32,
             worker_target: Some(WorkerTarget {
                 is_pull_mode: true,
                 ..WorkerTarget::default()
@@ -209,9 +221,13 @@ impl Harness {
     }
 
     fn start_attempt(&mut self, method: StepMethod) {
+        self.start_attempt_for("ChargeStep-1", method);
+    }
+
+    fn start_attempt_for(&mut self, step_execution_id: &str, method: StepMethod) {
         self.apply(Command::StepAttemptStarted(StepAttemptStartedCommand {
             invocation: Some(StepInvocationKey {
-                step_execution_id: "ChargeStep-1".to_owned(),
+                step_execution_id: step_execution_id.to_owned(),
                 method: method as i32,
             }),
             attempt: 1,
@@ -234,9 +250,13 @@ impl Harness {
     }
 
     fn complete_execute(&mut self, decision: StepDecision) {
+        self.complete_execute_for("ChargeStep-1", decision);
+    }
+
+    fn complete_execute_for(&mut self, step_execution_id: &str, decision: StepDecision) {
         self.apply(Command::StepMethodCompleted(StepMethodCompletedCommand {
             invocation: Some(StepInvocationKey {
-                step_execution_id: "ChargeStep-1".to_owned(),
+                step_execution_id: step_execution_id.to_owned(),
                 method: StepMethod::Execute as i32,
             }),
             attempt: 1,
@@ -251,9 +271,13 @@ impl Harness {
     }
 
     fn stop(&mut self) {
+        self.stop_with(StopType::Cancel);
+    }
+
+    fn stop_with(&mut self, stop_type: StopType) {
         self.apply(Command::FlowStop(FlowStopCommand {
             request: Some(StopFlowRequest {
-                stop_type: StopType::Cancel as i32,
+                stop_type: stop_type as i32,
                 ..StopFlowRequest::default()
             }),
         }));
@@ -1108,7 +1132,7 @@ fn read_model_returns_sorted_values_channels_and_wait_predicates() {
 }
 
 #[test]
-fn a_step_canceled_at_close_is_not_reported_as_completed() {
+fn a_step_canceled_by_cancel_close_is_reported_as_completed() {
     let mut harness = Harness::new();
     harness.start(FlowStartOptions::default(), None);
     harness.start_attempt(StepMethod::WaitFor);
@@ -1122,7 +1146,7 @@ fn a_step_canceled_at_close_is_not_reported_as_completed() {
             1,
         )
         .unwrap(),
-        StepCompletionState::EndedWithoutCompletion
+        StepCompletionState::Completed
     );
     assert_eq!(
         step_completion_state(
@@ -1131,6 +1155,142 @@ fn a_step_canceled_at_close_is_not_reported_as_completed() {
             harness.run_id,
             "ChargeStep",
             2,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+}
+
+#[test]
+fn a_step_canceled_by_a_decision_is_completed_even_after_terminate() {
+    let mut harness = Harness::new();
+    harness.start(
+        FlowStartOptions::default(),
+        Some(StepOptions {
+            skip_wait_for: true,
+            ..StepOptions::default()
+        }),
+    );
+    harness.start_attempt(StepMethod::Execute);
+    harness.complete_execute(StepDecision {
+        next_steps: vec![
+            StepMovement {
+                step_type: "CancelStep".to_owned(),
+                ..StepMovement::default()
+            },
+            StepMovement {
+                step_type: "DecidingStep".to_owned(),
+                step_options: Some(StepOptions {
+                    skip_wait_for: true,
+                    ..StepOptions::default()
+                }),
+                ..StepMovement::default()
+            },
+        ],
+        ..StepDecision::default()
+    });
+    harness.start_attempt_for("DecidingStep-1", StepMethod::Execute);
+    harness.complete_execute_for(
+        "DecidingStep-1",
+        StepDecision {
+            cancel_step_types: vec!["CancelStep".to_owned()],
+            ..StepDecision::default()
+        },
+    );
+    assert!(!is_flow_closed(&harness.state, harness.context.flow_hash, harness.run_id).unwrap());
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "CancelStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::Completed
+    );
+    harness.stop_with(StopType::Terminate);
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "CancelStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::Completed
+    );
+}
+
+#[test]
+fn a_step_canceled_by_terminate_close_ends_without_completion() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.stop_with(StopType::Terminate);
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+    harness.apply(Command::FlowConfigUpdate(FlowConfigUpdateCommand::default()));
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::EndedWithoutCompletion
+    );
+}
+
+#[test]
+fn a_failed_step_ends_without_completion() {
+    let mut harness = Harness::new();
+    harness.start(FlowStartOptions::default(), None);
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
+        )
+        .unwrap(),
+        StepCompletionState::NotCompleted
+    );
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.apply(Command::StepAttemptFailed(StepAttemptFailedCommand {
+        invocation: Some(StepInvocationKey {
+            step_execution_id: "ChargeStep-1".to_owned(),
+            method: StepMethod::WaitFor as i32,
+        }),
+        attempt: 1,
+        kind: 1,
+        worker_error: Some(WorkerErrorResponse {
+            detail: "unrecoverable".to_owned(),
+            ..WorkerErrorResponse::default()
+        }),
+        is_non_retryable: true,
+        ..StepAttemptFailedCommand::default()
+    }));
+    assert_eq!(
+        step_completion_state(
+            &harness.state,
+            harness.context.flow_hash,
+            harness.run_id,
+            "ChargeStep",
+            1,
         )
         .unwrap(),
         StepCompletionState::EndedWithoutCompletion
@@ -1463,6 +1623,38 @@ fn failed_close_drops_pending_step_method_events() {
             ..StopFlowRequest::default()
         }),
     }));
+    let events = get_history_events(
+        &harness.state,
+        harness.context.flow_hash,
+        harness.run_id,
+        0,
+        0,
+        &[],
+        0,
+    )
+    .unwrap()
+    .events;
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events[1].payload,
+        Some(flow_history_event::Payload::FlowClosed(_))
+    ));
+}
+
+#[test]
+fn fail_policy_flow_timeout_drops_pending_step_method_events() {
+    let mut harness = Harness::new();
+    harness.start_with_timeout(FlowStartOptions::default(), None, 30);
+    harness.start_attempt(StepMethod::WaitFor);
+    harness.apply(Command::TimersFired(TimersFiredCommand {
+        timers: vec![TimerId {
+            run_attempt: 1,
+            kind: Some(timer_id::Kind::FlowTimeout(FlowTimeoutTimerId {})),
+        }],
+    }));
+    let summary =
+        get_flow_summary(&harness.state, harness.context.flow_hash, harness.run_id).unwrap();
+    assert_eq!(summary.flow_status, FlowStatus::Failed as i32);
     let events = get_history_events(
         &harness.state,
         harness.context.flow_hash,
