@@ -20,4 +20,4 @@ mod window;
 
 pub(crate) use checkpoints::{after_command, pending_step_methods};
 pub(crate) use time_travel::apply_time_travel;
-pub(crate) use window::advance_window;
+pub(crate) use window::{WindowAdvanceTarget, advance_window, prune_window_history};

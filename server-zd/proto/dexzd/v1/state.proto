@@ -134,6 +134,8 @@ message RunRecord {
   uint64 pruned_semantic_event_count = 30;
   // Size of the latest checkpoint's rows; the checkpoint rule's attempt state size.
   uint64 last_checkpoint_state_bytes = 31;
+  // Next history seq to inspect when window advancement crosses a long bookkeeping span.
+  uint64 window_scan_seq = 32;
   // Additional parents attached to this child run through SubFlow reuse.
   repeated ParentFlowReference attached_parents = 40;
   // Largest timestamp of a pruned semantic point; earlier reset times target a pruned point.
@@ -161,6 +163,15 @@ message RunStorageUsage {
   uint64 live_value_bytes = 2;
   uint64 superseded_value_bytes = 3;
   uint64 history_bytes = 4;
+}
+
+// Small Flow row indexed by history seq, kind, and attempt for bounded window scans and accounting.
+message HistoryRowMetadata {
+  uint64 row_size_bytes = 1;
+  bool is_semantic = 2;
+  bool is_external_input = 3;
+  uint32 attempt = 4;
+  int64 timestamp_micros = 5;
 }
 
 // Row of RunTable::AttemptRecord, keyed by attempt (4 bytes big-endian).

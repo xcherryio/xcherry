@@ -8,7 +8,9 @@
 
 use dexzd_keyspace::row_keys::run_singleton_key;
 use dexzd_keyspace::{ColumnFamily, RunTable, parse_run_key, run_prefix, run_table_prefix};
-use dexzd_protocol::dexzd::v1::{RunRecord, RunStorageUsage, ValueBirthRecord, ValueGarbageRecord};
+use dexzd_protocol::dexzd::v1::{
+    HistoryRowMetadata, RunRecord, RunStorageUsage, ValueBirthRecord, ValueGarbageRecord,
+};
 use prost::Message;
 
 use crate::ApplyError;
@@ -79,22 +81,24 @@ fn usage_after_changes(
             })?;
         match change.column_family {
             ColumnFamily::Flow => {
-                state_delta += row_size(change.current.as_ref(), &change.key)
+                let row_delta = row_size(change.current.as_ref(), &change.key)
                     - row_size(change.previous.as_ref(), &change.key);
                 match parsed.table {
                     RunTable::ValueBirth => {
+                        state_delta += row_delta;
                         birth_delta += record_size::<ValueBirthRecord>(change, "value birth")?;
                     }
                     RunTable::ValueGarbage => {
+                        state_delta += row_delta;
                         garbage_delta +=
                             record_size::<ValueGarbageRecord>(change, "value garbage")?;
                     }
-                    _ => {}
+                    RunTable::HistoryRowMetadata => {
+                        history_delta += row_delta
+                            + record_size::<HistoryRowMetadata>(change, "history metadata")?;
+                    }
+                    _ => state_delta += row_delta,
                 }
-            }
-            ColumnFamily::History => {
-                history_delta += row_size(change.current.as_ref(), &change.key)
-                    - row_size(change.previous.as_ref(), &change.key);
             }
             _ => {
                 return Err(ApplyError::InvariantViolation {
@@ -150,6 +154,12 @@ impl SizedValueRecord for ValueBirthRecord {
 impl SizedValueRecord for ValueGarbageRecord {
     fn size_bytes(&self) -> u64 {
         self.size_bytes
+    }
+}
+
+impl SizedValueRecord for HistoryRowMetadata {
+    fn size_bytes(&self) -> u64 {
+        self.row_size_bytes
     }
 }
 

@@ -8,6 +8,7 @@
 
 //! End-to-end tests of the apply backbone over an in-memory state.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use dexzd_apply::values::load_for_wire;
@@ -16,29 +17,30 @@ use dexzd_apply::{
     apply_flow_command,
 };
 use dexzd_keyspace::row_keys::{
-    hard_delete_current_key, hard_delete_pending_key, history_record_key, prefix_range,
-    run_named_key, run_singleton_key, value_holder_key, value_row_key,
+    hard_delete_current_key, hard_delete_pending_key, history_record_key, history_row_metadata_key,
+    prefix_range, run_named_key, run_singleton_key, value_holder_key, value_row_key,
 };
 use dexzd_keyspace::{
     ColumnFamily, PartitionHasher, RunId, RunTable, TenantId, ValueId, ValueReference,
-    parse_run_key, run_prefix,
+    parse_run_key, run_prefix, run_table_prefix,
 };
 use dexzd_protocol::dex::{
-    AttributeWrite, CloseDecision, CloseDecisionType, FlowAlreadyStartedOptions, FlowStartOptions,
-    FlowStatus, FlowTimeoutHandlerOptions, FlowTimeoutPolicy, IdReusePolicy,
-    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, Kv, RetryPolicy,
+    AttributeWrite, CloseDecision, CloseDecisionType, FlowAlreadyStartedOptions, FlowResetType,
+    FlowStartOptions, FlowStatus, FlowTimeoutHandlerOptions, FlowTimeoutPolicy, IdReusePolicy,
+    InvokeExecuteMethodResponse, InvokeWaitForMethodResponse, Kv, ResetFlowRequest, RetryPolicy,
     SetAttributesRequest, StartFlowRequest, StepDecision, StepMovement, StepOptions,
     StopFlowRequest, StopType, Value, WorkerErrorResponse, WorkerTarget, flow_history_event, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, CommandReply, FlowCommand, FlowStartCommand,
     FlowStopCommand, FlowTimeoutTimerId, HardDeleteObjectRecord, HardDeleteObjectReference,
-    HistoryRecord, RetryBackoffTimerId, RunRecord, RunSettings, RunStorageUsage,
-    StepAttemptFailedCommand, StepAttemptHeartbeatCommand, StepAttemptStartedCommand,
-    StepExecutionPhase, StepExecutionRecord, StepInvocationKey, StepMethod,
-    StepMethodCompletedCommand, StoredValue, TimerId, TimersFiredCommand, ValueBirthRecord,
-    ValueGarbageRecord, command_reply, flow_command::Command, step_attempt_heartbeat_command,
-    step_method_completed_command, stored_value, timer_id,
+    HistoryRecord, HistoryRowMetadata, RetryBackoffTimerId, RunRecord, RunSettings,
+    RunStorageUsage, StepAttemptFailedCommand, StepAttemptHeartbeatCommand,
+    StepAttemptStartedCommand, StepExecutionPhase, StepExecutionRecord, StepInvocationKey,
+    StepInvocationPhase, StepMethod, StepMethodCompletedCommand, StoredValue, TimeTravelCommand,
+    TimerId, TimersFiredCommand, ValueBirthRecord, ValueGarbageRecord, command_reply,
+    flow_command::Command, step_attempt_heartbeat_command, step_method_completed_command,
+    stored_value, timer_id,
 };
 use prost::Message;
 
@@ -69,6 +71,44 @@ impl FlowStateReader for MemoryState {
             .take(limit)
             .map(|((_, key), value)| (key.clone(), value.clone()))
             .collect())
+    }
+}
+
+struct HistoryWorkCountingReader<'a> {
+    state: &'a MemoryState,
+    metadata_prefix: Vec<u8>,
+    history_reads: Cell<usize>,
+    metadata_scan_rows: Cell<usize>,
+}
+
+impl FlowStateReader for HistoryWorkCountingReader<'_> {
+    fn get(
+        &self,
+        column_family: ColumnFamily,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, StateReadError> {
+        if column_family == ColumnFamily::History {
+            self.history_reads.set(self.history_reads.get() + 1);
+        }
+        self.state.get(column_family, key)
+    }
+
+    fn scan(
+        &self,
+        column_family: ColumnFamily,
+        start: &[u8],
+        end: &[u8],
+        limit: usize,
+    ) -> Result<Vec<StateRow>, StateReadError> {
+        let rows = self.state.scan(column_family, start, end, limit)?;
+        if column_family == ColumnFamily::History {
+            self.history_reads
+                .set(self.history_reads.get() + rows.len());
+        } else if column_family == ColumnFamily::Flow && start.starts_with(&self.metadata_prefix) {
+            self.metadata_scan_rows
+                .set(self.metadata_scan_rows.get() + rows.len());
+        }
+        Ok(rows)
     }
 }
 
@@ -167,6 +207,36 @@ impl Harness {
             self.assert_value_table_invariant();
         }
         outcome
+    }
+
+    fn apply_with_history_counts(&mut self, body: Command) -> (ApplyOutcome, usize, usize) {
+        let command = self.command(body);
+        let run_id = RunId::from_slice(&self.run_id).expect("started run");
+        let reader = HistoryWorkCountingReader {
+            state: &self.state,
+            metadata_prefix: run_table_prefix(
+                self.context.flow_hash,
+                run_id,
+                RunTable::HistoryRowMetadata,
+            ),
+            history_reads: Cell::new(0),
+            metadata_scan_rows: Cell::new(0),
+        };
+        let outcome = apply_flow_command(&self.context, &reader, &command).expect("apply succeeds");
+        let history_reads = reader.history_reads.get();
+        let metadata_scan_rows = reader.metadata_scan_rows.get();
+        let again =
+            apply_flow_command(&self.context, &self.state, &command).expect("apply succeeds");
+        assert_eq!(outcome.writes, again.writes, "apply must be deterministic");
+        self.state.commit(&outcome);
+        if !outcome.writes.is_empty() {
+            assert_eq!(
+                self.run_record().storage.expect("run storage is accounted"),
+                self.recount_storage()
+            );
+            self.assert_value_table_invariant();
+        }
+        (outcome, history_reads, metadata_scan_rows)
     }
 
     fn start(&mut self, request: StartFlowRequest) -> ApplyOutcome {
@@ -315,7 +385,11 @@ impl Harness {
             let table = parse_run_key(key).expect("valid run key").table;
             match column_family {
                 ColumnFamily::Flow => {
-                    usage.state_row_bytes += (key.len() + value.len()) as u64;
+                    if table == RunTable::HistoryRowMetadata {
+                        usage.history_bytes += (key.len() + value.len()) as u64;
+                    } else {
+                        usage.state_row_bytes += (key.len() + value.len()) as u64;
+                    }
                     if table == RunTable::ValueBirth {
                         birth_bytes += ValueBirthRecord::decode(value.as_slice())
                             .expect("valid birth row")
@@ -1047,6 +1121,203 @@ fn garbage_collection_is_bounded_and_resumes_on_the_next_command() {
     assert_eq!(garbage_row_count(&harness), 0);
 }
 
+#[test]
+fn long_history_window_work_is_bounded_and_resumes_across_commands() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.max_retained_superseded_bytes = 0;
+    run_settings.history_window_semantic_events = 250;
+    run_settings.history_prune_chunk_semantic_events = 1;
+    run_settings.checkpoint_max_commands = 1;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    let first_reference = harness.value_reference(2, 0);
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    harness.set_attribute("report", string_value(&"a".repeat(500)), "set-1");
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_attribute("report", string_value(&"b".repeat(500)), "set-2");
+    for index in 0..300 {
+        harness.set_attribute(
+            "counter",
+            string_value(&format!("count-{index}")),
+            &format!("fill-{index}"),
+        );
+    }
+    harness.set_attribute("report", string_value(&"c".repeat(500)), "set-3");
+    let mut scanned_bookkeeping = false;
+    for _ in 0..300 {
+        let (outcome, history_reads, metadata_scan_rows) = harness.apply_with_history_counts(
+            Command::StepAttemptHeartbeat(StepAttemptHeartbeatCommand {
+                invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+                attempt: 1,
+                checkpoint: None,
+            }),
+        );
+        assert_eq!(history_reads, 0);
+        assert!(metadata_scan_rows <= 256);
+        assert!(
+            outcome
+                .writes
+                .iter()
+                .filter(|write| {
+                    matches!(
+                        write,
+                        StateWrite::Delete {
+                            column_family: ColumnFamily::History,
+                            ..
+                        }
+                    )
+                })
+                .count()
+                <= 128
+        );
+        let record = harness.run_record();
+        scanned_bookkeeping |= record.window_scan_seq > record.window_start_seq;
+    }
+    assert!(scanned_bookkeeping, "bookkeeping scan progress is saved");
+    harness.complete_wait_for("ChargeStep-1", 1);
+    let loss_seq = harness.run_record().next_run_seq - 1;
+    assert!(
+        load_for_wire(
+            &harness.state,
+            harness.context.flow_hash,
+            run_id,
+            &first_reference
+        )
+        .expect("superseded value remains readable")
+        .is_some()
+    );
+    let mut collected = false;
+    for index in 0..16 {
+        let (outcome, history_reads, metadata_scan_rows) =
+            harness.apply_with_history_counts(Command::AttributesSet(AttributesSetCommand {
+                request: Some(SetAttributesRequest {
+                    attributes: vec![AttributeWrite {
+                        key: "counter".to_owned(),
+                        value: Some(string_value(&format!("advance-{index}"))),
+                        ..AttributeWrite::default()
+                    }],
+                    request_id: format!("advance-{index}"),
+                    ..SetAttributesRequest::default()
+                }),
+                request_fingerprint: vec![u8::try_from(index).expect("small index")],
+                ..AttributesSetCommand::default()
+            }));
+        assert_eq!(history_reads, 0, "pruning does not read full History rows");
+        assert!(
+            metadata_scan_rows <= 256,
+            "one scan page and one deletion page are the per-command maximum"
+        );
+        let deleted_rows = outcome
+            .writes
+            .iter()
+            .filter(|write| {
+                matches!(
+                    write,
+                    StateWrite::Delete {
+                        column_family: ColumnFamily::History,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert!(deleted_rows <= 128, "one page of History rows is deleted");
+        assert!(!outcome.writes.iter().any(|write| {
+            matches!(
+                write,
+                StateWrite::DeleteRange {
+                    column_family: ColumnFamily::History,
+                    ..
+                }
+            )
+        }));
+        if harness.run_record().window_start_seq > loss_seq {
+            collected = load_for_wire(
+                &harness.state,
+                harness.context.flow_hash,
+                run_id,
+                &first_reference,
+            )
+            .expect("collected reference is omitted")
+            .is_none();
+            if collected {
+                break;
+            }
+        }
+    }
+    assert!(collected, "later commands finish the bounded window work");
+}
+
+#[test]
+fn reapplied_external_input_keeps_history_metadata_and_window_counts() {
+    let mut harness = Harness::new("order-1");
+    let mut run_settings = settings();
+    run_settings.history_window_semantic_events = 2;
+    run_settings.history_prune_chunk_semantic_events = 1;
+    harness.start_with_settings(start_request("request-1"), run_settings);
+    harness.set_attribute("status", string_value("first"), "set-1");
+    harness.set_attribute("status", string_value("second"), "set-2");
+    let outcome = harness.apply(Command::TimeTravel(TimeTravelCommand {
+        request: Some(ResetFlowRequest {
+            flow_id: "order-1".to_owned(),
+            reset_type: FlowResetType::Beginning as i32,
+            run_attempt: 1,
+            reason: "test".to_owned(),
+            skip_writes_reapply: false,
+            ..ResetFlowRequest::default()
+        }),
+    }));
+    assert!(matches!(
+        outcome.reply.reply,
+        Some(command_reply::Reply::TimeTravel(_))
+    ));
+    let travel_seq = harness.run_record().next_run_seq - 1;
+    let run_id = RunId::from_slice(&harness.run_id).expect("started run");
+    let record: HistoryRecord = harness
+        .state
+        .get(
+            ColumnFamily::History,
+            &history_record_key(harness.context.flow_hash, run_id, travel_seq),
+        )
+        .expect("memory read succeeds")
+        .map(|bytes| HistoryRecord::decode(bytes.as_slice()).expect("history decodes"))
+        .expect("time travel writes history");
+    assert_eq!(record.reapplied_inputs.len(), 2);
+    let metadata: HistoryRowMetadata = harness
+        .state
+        .get(
+            ColumnFamily::Flow,
+            &history_row_metadata_key(
+                harness.context.flow_hash,
+                run_id,
+                travel_seq,
+                RunTable::HistoryRecord,
+                0,
+            ),
+        )
+        .expect("memory read succeeds")
+        .map(|bytes| HistoryRowMetadata::decode(bytes.as_slice()).expect("metadata decodes"))
+        .expect("time travel writes metadata");
+    assert_eq!(metadata.is_semantic, record.is_semantic);
+    assert_eq!(metadata.is_external_input, record.is_external_input);
+    assert_eq!(metadata.attempt, record.attempt);
+    assert_eq!(metadata.timestamp_micros, record.timestamp_micros);
+    assert!(metadata.is_semantic && metadata.is_external_input);
+    for index in 0..8 {
+        if harness.run_record().window_start_seq > travel_seq {
+            break;
+        }
+        harness.set_attribute(
+            "status",
+            string_value(&format!("later-{index}")),
+            &format!("set-later-{index}"),
+        );
+    }
+    let run = harness.run_record();
+    assert!(run.window_start_seq > travel_seq);
+    assert!(run.max_pruned_external_input_seq >= travel_seq);
+    assert!(run.last_pruned_semantic_timestamp_micros >= record.timestamp_micros);
+}
+
 fn garbage_row_count(harness: &Harness) -> usize {
     harness
         .state
@@ -1216,6 +1487,38 @@ fn state_limit_does_not_drop_an_attempt_start() {
             .iter()
             .any(|effect| { matches!(effect, ApplyEffect::InvocationStarted { .. }) })
     );
+}
+
+#[test]
+fn empty_heartbeat_at_state_limit_does_not_fail_the_attempt() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+    harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
+    harness.set_max_run_state_bytes(1);
+    let before = harness
+        .run_record()
+        .storage
+        .expect("run storage is accounted");
+    let heartbeat = harness.apply(Command::StepAttemptHeartbeat(StepAttemptHeartbeatCommand {
+        invocation: Some(key("ChargeStep-1", StepMethod::WaitFor)),
+        attempt: 1,
+        checkpoint: None,
+    }));
+    assert!(!heartbeat.writes.is_empty());
+    assert!(!is_error(&heartbeat.reply, 8));
+    let record = harness.run_record();
+    let after = record.storage.expect("run storage is accounted");
+    assert_eq!(record.status, FlowStatus::Running as i32);
+    assert_eq!(
+        harness
+            .step_execution("ChargeStep-1")
+            .invocation
+            .expect("attempt remains running")
+            .phase,
+        StepInvocationPhase::Running as i32
+    );
+    assert_eq!(after.state_row_bytes, before.state_row_bytes);
+    assert!(after.history_bytes > before.history_bytes);
 }
 
 #[test]

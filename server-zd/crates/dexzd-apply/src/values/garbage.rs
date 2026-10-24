@@ -6,18 +6,17 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use dexzd_keyspace::row_keys::{history_record_key, prefix_range, value_row_key};
+use dexzd_keyspace::row_keys::{prefix_range, value_row_key};
 use dexzd_keyspace::{ColumnFamily, RunTable, ValueId, run_table_prefix};
-use dexzd_protocol::dexzd::v1::{HistoryRecord, ValueGarbageRecord};
+use dexzd_protocol::dexzd::v1::ValueGarbageRecord;
 
 use crate::ApplyError;
 use crate::command_handlers::run_cursor::RunCursor;
-use crate::history::advance_window;
+use crate::history::{WindowAdvanceTarget, advance_window, prune_window_history};
 use crate::state_access::FlowTransaction;
 use crate::values::{projected_superseded_value_bytes, reconcile_run_storage};
 
 const GARBAGE_ROWS_PER_CALL: usize = 128;
-const HISTORY_ROWS_PER_PAGE: usize = 128;
 
 /// Collects at most 128 values whose last holder disappeared before the window start.
 pub(crate) fn prune_garbage(
@@ -103,14 +102,13 @@ pub(crate) fn enforce_superseded_byte_cap(
     if excess_bytes > 0
         && let Some(target_garbage_seq) = garbage_seq_to_fit_cap(transaction, cursor, excess_bytes)?
     {
-        let semantic_points =
-            semantic_points_before_garbage(transaction, cursor, target_garbage_seq)?;
-        if semantic_points > 0 && !advance_window(transaction, cursor, semantic_points)? {
-            return Err(ApplyError::InvariantViolation {
-                detail: "the byte cap selected a missing semantic window point".to_owned(),
-            });
-        }
+        advance_window(
+            transaction,
+            cursor,
+            WindowAdvanceTarget::GarbageSeq(target_garbage_seq),
+        )?;
     }
+    prune_window_history(transaction, cursor)?;
     reconcile_run_storage(transaction, cursor)?;
     Ok(())
 }
@@ -157,45 +155,4 @@ fn garbage_seq_to_fit_cap(
         }
     }
     Ok(target_seq)
-}
-
-fn semantic_points_before_garbage(
-    transaction: &FlowTransaction<'_>,
-    cursor: &RunCursor,
-    garbage_seq: u64,
-) -> Result<u64, ApplyError> {
-    let prefix = run_table_prefix(
-        cursor.rows.flow_hash,
-        cursor.rows.run_id,
-        RunTable::HistoryRecord,
-    );
-    let (_, end) = prefix_range(&prefix);
-    let mut next_seq = cursor.record.window_start_seq;
-    let mut semantic_points = 0;
-    while next_seq <= cursor.seq {
-        let start = history_record_key(cursor.rows.flow_hash, cursor.rows.run_id, next_seq);
-        let page = transaction.scan_messages::<HistoryRecord>(
-            ColumnFamily::History,
-            &start,
-            &end,
-            HISTORY_ROWS_PER_PAGE,
-            "history record",
-        )?;
-        if page.is_empty() {
-            break;
-        }
-        for (_, record) in page {
-            if record.seq > cursor.seq {
-                return Ok(0);
-            }
-            next_seq = record.seq.saturating_add(1);
-            if record.is_semantic {
-                if record.seq > garbage_seq {
-                    return Ok(semantic_points);
-                }
-                semantic_points += 1;
-            }
-        }
-    }
-    Ok(0)
 }
