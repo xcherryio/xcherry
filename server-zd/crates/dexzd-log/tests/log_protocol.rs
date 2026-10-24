@@ -222,6 +222,7 @@ impl ObjectStore for MemoryStore {
             key: key.to_owned(),
             size: object.object_size,
             etag: object.etag,
+            last_modified_unix_micros: None,
         }))
     }
 
@@ -256,6 +257,7 @@ impl ObjectStore for MemoryStore {
                 key: key.clone(),
                 size: body.len() as u64,
                 etag: format!("{:x}", xxhash_rust::xxh3::xxh3_64(body)),
+                last_modified_unix_micros: None,
             })
             .collect();
         Ok(ObjectListing {

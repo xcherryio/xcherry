@@ -1074,6 +1074,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bytes",
+ "dexzd-clock",
  "s3mock",
  "s3mock-server",
  "tempfile",

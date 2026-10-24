@@ -9,8 +9,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use dexzd_engine::LocalStoreConfig;
-use dexzd_object_store::{ObjectStore, ObjectStoreOperation};
+use dexzd_object_store::{ObjectStore, ObjectStoreOperation, WriteCondition};
 use dexzd_protocol::dexzd::v1::SnapshotManifest;
 use prost::Message;
 
@@ -287,5 +288,125 @@ async fn a_snapshot_reads_each_stored_snapshot_manifest_at_most_once() {
     test.node.take_snapshot().await.expect("snapshot succeeds");
     assert_eq!(manifest_reads(), reads_before);
     assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 5);
+    test.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn retention_deletes_only_old_snapshot_files_without_a_manifest() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::from_secs(60 * 60);
+    let test = cluster.start_with(&config).await.expect("node starts");
+    test.commit_prompt("orphan-flow", 1).await;
+    let first = test.node.take_snapshot().await.expect("first snapshot");
+    let first_content = cluster
+        .object_store
+        .get(&first.manifest_key)
+        .await
+        .expect("read first manifest")
+        .expect("first manifest exists");
+    let first_manifest = SnapshotManifest::decode(first_content.bytes).expect("decode manifest");
+    assert!(!first_manifest.files.is_empty());
+    let lineage = lineage_of(&first.manifest_key);
+    let old_orphan = format!("snapshot/node-a/{lineage}/files/old-orphan");
+    let young_orphan = format!("snapshot/node-a/{lineage}/files/young-orphan");
+    cluster
+        .object_store
+        .put(
+            &old_orphan,
+            Bytes::from_static(b"old"),
+            WriteCondition::CreateOnly,
+        )
+        .await
+        .expect("upload old orphan");
+    cluster.clock.shift(2 * 60 * 60 * 1_000_000);
+    cluster
+        .object_store
+        .put(
+            &young_orphan,
+            Bytes::from_static(b"young"),
+            WriteCondition::CreateOnly,
+        )
+        .await
+        .expect("upload young orphan");
+    test.commit_prompt("orphan-flow", 1).await;
+    test.node.take_snapshot().await.expect("second snapshot");
+
+    assert!(
+        cluster
+            .object_store
+            .get(&old_orphan)
+            .await
+            .expect("read old orphan")
+            .is_none()
+    );
+    assert!(
+        cluster
+            .object_store
+            .get(&young_orphan)
+            .await
+            .expect("read young orphan")
+            .is_some()
+    );
+    for file in &first_manifest.files {
+        assert!(
+            cluster
+                .object_store
+                .get(&file.object_key)
+                .await
+                .expect("read retained file")
+                .is_some(),
+            "{} remains referenced by the first manifest",
+            file.object_key
+        );
+    }
+    test.node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn retention_limits_snapshot_listing_pages_per_run() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::ZERO;
+    let test = cluster.start_with(&config).await.expect("node starts");
+    for index in 0..10_001 {
+        let key = format!("snapshot/node-a/zzzz/files/orphan-{index:05}");
+        cluster
+            .object_store
+            .put(&key, Bytes::new(), WriteCondition::CreateOnly)
+            .await
+            .expect("upload orphan");
+    }
+    let lists_before = cluster
+        .object_store
+        .call_count(ObjectStoreOperation::List, "snapshot/node-a/");
+    test.commit_prompt("bounded-list-flow", 1).await;
+    test.node.take_snapshot().await.expect("snapshot succeeds");
+    let lists_after = cluster
+        .object_store
+        .call_count(ObjectStoreOperation::List, "snapshot/node-a/");
+    assert_eq!(lists_after - lists_before, 10);
+    let first_orphan = "snapshot/node-a/zzzz/files/orphan-00000";
+    assert!(
+        cluster
+            .object_store
+            .get(first_orphan)
+            .await
+            .expect("read orphan before scan completes")
+            .is_some()
+    );
+    test.commit_prompt("bounded-list-flow", 1).await;
+    test.node
+        .take_snapshot()
+        .await
+        .expect("second snapshot succeeds");
+    assert!(
+        cluster
+            .object_store
+            .get(first_orphan)
+            .await
+            .expect("read orphan after scan completes")
+            .is_none()
+    );
     test.node.shutdown().await;
 }

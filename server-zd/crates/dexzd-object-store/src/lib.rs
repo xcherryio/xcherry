@@ -89,6 +89,8 @@ pub struct ObjectMetadata {
     pub size: u64,
     /// ETag of the current version.
     pub etag: String,
+    /// Last write time in microseconds since the Unix epoch, when available.
+    pub last_modified_unix_micros: Option<i64>,
 }
 
 /// One page of a listing.
