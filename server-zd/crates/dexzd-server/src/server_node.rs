@@ -196,6 +196,7 @@ impl ServerNode {
                         partition_hasher: partition_hasher.clone(),
                         clock: clock.clone(),
                         validation_config: components.validation().clone(),
+                        stream_store: stream_store.clone(),
                     },
                 );
                 let registry = FlowRuntimeRegistry::new(
