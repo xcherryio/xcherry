@@ -206,7 +206,8 @@ impl ServerNode {
                         applier: applier.clone(),
                         effects: Arc::new(effect_runner.clone()),
                         rpc_invoker: Arc::new(PullWorkerRpcInvoker::new(dispatch.clone())),
-                        hard_delete_reader: Arc::new(hard_delete_objects),
+                        hard_delete_reader: Arc::new(hard_delete_objects.clone()),
+                        hard_delete_uploader: Arc::new(hard_delete_objects),
                     },
                 );
                 let effect_tasks = effect_tasks.start(Arc::new(registry.clone()));
