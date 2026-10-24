@@ -13,5 +13,10 @@
 // limitations under the License.
 
 mod my_dependency_service;
+mod worker_mode;
 
 pub use my_dependency_service::MyDependencyService;
+pub use worker_mode::{
+    PULL_REGISTRATION_TIMEOUT, UnknownWorkerModeError, WORKER_MODE_ENVIRONMENT_VARIABLE,
+    WorkerMode, example_pull_worker_options,
+};

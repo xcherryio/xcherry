@@ -16,6 +16,7 @@ mod command_scope;
 pub(crate) mod flow_close;
 pub(crate) mod flow_data;
 pub(crate) mod flow_start;
+mod rpc_committed;
 pub(crate) mod run_cursor;
 pub(crate) mod step_commands;
 
@@ -147,9 +148,10 @@ fn apply_run_command(
         Command::TimerSkip(skip) => {
             crate::steps::wait_conditions::apply_timer_skip(transaction, cursor, scope, skip)
         }
-        Command::RpcCommitted(_) | Command::TimeTravel(_) => {
-            Ok(HandlerResult::Rejected(unimplemented_reply(scope)))
+        Command::RpcCommitted(command) => {
+            rpc_committed::apply_rpc_committed(transaction, cursor, scope, command)
         }
+        Command::TimeTravel(_) => Ok(HandlerResult::Rejected(unimplemented_reply(scope))),
         Command::InboxMessage(_) | Command::RunPurge(_) => Err(ApplyError::InvariantViolation {
             detail: "cross-Flow command routed to the wrong handler".to_owned(),
         }),

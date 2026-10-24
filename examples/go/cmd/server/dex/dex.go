@@ -75,6 +75,7 @@ import (
 	"github.com/superdurable/dex/examples/go/registry"
 	"github.com/superdurable/dex/examples/go/server/httputil"
 	"github.com/superdurable/dex/examples/go/shared/service"
+	"github.com/superdurable/dex/examples/go/shared/workermode"
 	sdk "github.com/superdurable/dex/sdk-go/dex"
 )
 
@@ -84,6 +85,7 @@ type sampleServer struct {
 	cache         *blobcache.Cache
 	httpServer    *http.Server
 	workerAddress string
+	workerMode    workermode.WorkerMode
 	workerResult  chan error
 	httpResult    chan error
 }
@@ -110,13 +112,11 @@ func newSampleServer() (*sampleServer, error) {
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("register example flows: %w", err), cache.Close())
 	}
-	workerOptions := sdk.WorkerOptions{
-		BindAddress:        environmentOr("DEX_WORKER_BIND_ADDRESS", "127.0.0.1:8803"),
-		FlowServiceAddress: os.Getenv("DEX_FLOW_SERVICE_ADDRESS"),
+	workerMode, err := workermode.ReadWorkerModeFromEnvironment()
+	if err != nil {
+		return nil, errors.Join(err, cache.Close())
 	}
-	if target := os.Getenv("DEX_WORKER_TARGET"); target != "" {
-		workerOptions.WorkerTarget.Address = target
-	}
+	workerOptions := newWorkerOptions(workerMode)
 	worker, err := sdk.NewWorker(flowRegistry, cache, workerOptions)
 	if err != nil {
 		return nil, errors.Join(err, cache.Close())
@@ -135,6 +135,7 @@ func newSampleServer() (*sampleServer, error) {
 		worker:        worker,
 		cache:         cache,
 		workerAddress: workerOptions.BindAddress,
+		workerMode:    workerMode,
 		workerResult:  make(chan error, 1),
 		httpResult:    make(chan error, 1),
 	}
@@ -143,6 +144,23 @@ func newSampleServer() (*sampleServer, error) {
 		Handler: server.router(),
 	}
 	return server, nil
+}
+
+func newWorkerOptions(workerMode workermode.WorkerMode) sdk.WorkerOptions {
+	if workerMode.IsPull() {
+		return sdk.WorkerOptions{
+			FlowServiceAddress: os.Getenv("DEX_FLOW_SERVICE_ADDRESS"),
+			Pull:               workermode.NewExamplePullWorkerOptions(),
+		}
+	}
+	workerOptions := sdk.WorkerOptions{
+		BindAddress:        environmentOr("DEX_WORKER_BIND_ADDRESS", "127.0.0.1:8803"),
+		FlowServiceAddress: os.Getenv("DEX_FLOW_SERVICE_ADDRESS"),
+	}
+	if target := os.Getenv("DEX_WORKER_TARGET"); target != "" {
+		workerOptions.WorkerTarget.Address = target
+	}
+	return workerOptions
 }
 
 func environmentOr(name string, fallback string) string {
@@ -230,6 +248,11 @@ func (server *sampleServer) Run(ctx context.Context) error {
 }
 
 func (server *sampleServer) waitForWorker(ctx context.Context) error {
+	if server.workerMode.IsPull() {
+		registrationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return server.worker.WaitPullRegistered(registrationCtx)
+	}
 	address, err := localWorkerAddress(server.workerAddress)
 	if err != nil {
 		return err
