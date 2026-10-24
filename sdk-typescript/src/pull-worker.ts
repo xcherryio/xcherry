@@ -17,7 +17,7 @@ import {
   type ServiceError,
 } from "@grpc/grpc-js";
 
-import { credentialInterceptors, type Credential } from "./credential.js";
+import { ApiKeyCredential, credentialInterceptors, type Credential } from "./credential.js";
 import { registeredFlow, type RegisteredFlow, type Registry } from "./flow.js";
 import {
   InvokeExecuteMethodOutput,
@@ -63,6 +63,7 @@ interface PollStream {
   isDraining: boolean;
   isRetiring: boolean;
   isReconnectRequested: boolean;
+  hasRetriedRejectedToken: boolean;
   backoffMs: number;
   failure: ServiceError | undefined;
 }
@@ -71,6 +72,7 @@ export class PullWorker {
   public readonly appWorkerID: string;
   public readonly registration: PullRegistration;
   private readonly client: InstanceType<typeof WorkerTaskServiceClient>;
+  private readonly hasRefreshableCredential: boolean;
   private readonly queues: readonly string[];
   private readonly flowTypes: readonly string[];
   private readonly registeredFlows: ReadonlyMap<string, RegisteredFlow>;
@@ -121,6 +123,7 @@ export class PullWorker {
     this.queues = [this.appWorkerID, ...this.flowTypes];
     this.registration = new PullRegistration(this.queues);
     this.client = createWorkerTaskClient(serverAddress, credential);
+    this.hasRefreshableCredential = credential instanceof ApiKeyCredential;
   }
 
   public get reservedRpcDeclines(): number {
@@ -198,7 +201,7 @@ export class PullWorker {
           queue, stream: undefined, task: undefined, retryTimer: undefined,
           halfCloseTimer: undefined, halfClosePromise: undefined, resolveHalfClose: undefined,
           isRegistered: false, hasRecordedResult: false, supportsUnknownNameRejection: false, isDisconnected: false, isHalfClosed: false, isDraining: false, isRetiring: false,
-          isReconnectRequested: false,
+          isReconnectRequested: false, hasRetriedRejectedToken: false,
           backoffMs: 100, failure: undefined,
         };
         this.streams.add(poll);
@@ -257,6 +260,7 @@ export class PullWorker {
         this.registration.registered(poll.queue);
         poll.supportsUnknownNameRejection = frame.value.supportsUnknownNameRejection;
         poll.backoffMs = 100;
+        poll.hasRetriedRejectedToken = false;
         this.reconcile();
       } else {
         console.error("Worker task stream did not register");
@@ -509,6 +513,11 @@ export class PullWorker {
     if (this.isStopping || poll.retryTimer !== undefined) return;
     if (poll.isReconnectRequested) poll.backoffMs = 100;
     const failure = poll.failure;
+    if (failure?.code === status.UNAUTHENTICATED && this.hasRefreshableCredential && !poll.hasRetriedRejectedToken) {
+      poll.hasRetriedRejectedToken = true;
+      queueMicrotask(() => this.openStream(poll));
+      return;
+    }
     let delayMs: number;
     if (failure?.code === status.UNIMPLEMENTED) {
       if (!this.hasLoggedUnsupportedServer) {
@@ -531,6 +540,7 @@ export class PullWorker {
     }
     poll.retryTimer = setTimeout(() => {
       poll.retryTimer = undefined;
+      poll.hasRetriedRejectedToken = false;
       this.openStream(poll);
     }, delayMs);
   }
@@ -542,7 +552,8 @@ export class PullWorker {
     const isPermanent = failure !== undefined && [
       status.INVALID_ARGUMENT, status.RESOURCE_EXHAUSTED, status.UNIMPLEMENTED,
       status.PERMISSION_DENIED, status.UNAUTHENTICATED,
-    ].includes(failure.code);
+    ].includes(failure.code) && !(failure.code === status.UNAUTHENTICATED
+      && this.hasRefreshableCredential && !poll.hasRetriedRejectedToken);
     const isRejected = this.registration.ended(poll.queue, poll.isRegistered, isPermanent ? failure : undefined);
     poll.isRegistered = false;
     if (isRejected && this.options.stopOnPermanentStreamRejection === true && !this.isStopping) {

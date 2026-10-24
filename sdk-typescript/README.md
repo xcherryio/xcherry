@@ -612,11 +612,13 @@ for a proxy or a test endpoint. The application owns an injected fetch client.
 
 If Dex rejects a token with `UNAUTHENTICATED`, the credential discards it only
 when it is still current. Unary Client and Worker calls then retry once with a
-fresh token; rejected pull streams reconnect through the Worker's existing
-path. The API key and access token are absent from credential inspection and
-exchange error messages. A single credential is safe to share among concurrent
-Clients and Workers. It holds no persistent HTTP client or idle background task;
-an active exchange ends within its timeout.
+fresh token. Rejected pull streams reconnect immediately once with a fresh token;
+a second rejection uses the Worker's 60–90 second backoff. The API key and access
+token are absent from credential inspection and exchange error messages. A single
+credential is safe to share among concurrent Clients and Workers. The application
+owns it; closing a Client or Worker does not close the credential. It holds no
+persistent HTTP client or idle background task; an active exchange ends within
+its timeout.
 
 The bearer token travels over the SDK's plaintext gRPC connection. Protect
 the network path between the application and Dex.

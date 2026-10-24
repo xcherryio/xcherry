@@ -148,13 +148,15 @@ const apiKeyCredentialStates = new WeakMap<ApiKeyCredential, ApiKeyCredentialSta
  * lifetime start one shared background refresh and continue using the valid token.
  * Failed refreshes are retried no more often than every five seconds while that token
  * remains valid. Expired-token callers await the same exchange, bounded by the exchange
- * timeout. A rejected token is discarded and a unary Dex call is retried once.
+ * timeout. A rejected token is discarded. Unary calls retry once, and pull streams
+ * reconnect immediately once before using the Worker's backoff.
  *
  * The token URL must use HTTPS, except loopback HTTP is accepted for local endpoints.
  * Neither the API key nor access token appears in formatted credentials or errors.
  * Concurrent calls are safe. The credential owns no persistent HTTP client or timer;
  * an in-flight exchange ends within the configured timeout. An injected fetch is owned
- * by the application.
+ * by the application. The application owns this credential when sharing it among
+ * Clients and Workers; closing either does not close the credential.
  *
  * @example
  * ```ts

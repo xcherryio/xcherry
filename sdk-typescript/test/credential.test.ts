@@ -514,7 +514,7 @@ test("a stale unary rejection leaves a newer cached token intact", async () => {
   }
 });
 
-test("ApiKeyCredential discards a rejected Worker poll token and reconnects without unary retry", async () => {
+test("ApiKeyCredential discards a rejected Worker poll token and reconnects immediately", async () => {
   const endpoint = await startTokenEndpoint((index) => tokenResponse(index === 1 ? firstAccessToken : "accepted-token-b", 60));
   const server = await startServer({ rejectPoll: (authorization) => authorization !== "Bearer accepted-token-b" });
   const credential = new ApiKeyCredential({ tokenUrl: endpoint.url, serverId: "dex-server", apiKey });
@@ -527,16 +527,34 @@ test("ApiKeyCredential discards a rejected Worker poll token and reconnects with
   });
   try {
     await worker.start();
-    await until(() => server.taskHeaders.length === 1);
-    const pullWorker = (worker as unknown as { pullWorker: { streams: Set<{ retryTimer?: ReturnType<typeof setTimeout> }> } }).pullWorker;
-    await until(() => [...pullWorker.streams].some((poll) => poll.retryTimer !== undefined));
-    assert.deepEqual(server.taskHeaders, [`Bearer ${firstAccessToken}`]);
-    const reconnectTimer = [...pullWorker.streams].find((poll) => poll.retryTimer !== undefined)!.retryTimer as ReturnType<typeof setTimeout> & { _onTimeout(): void };
-    const reconnect = reconnectTimer._onTimeout;
-    clearTimeout(reconnectTimer);
-    reconnect();
     await until(() => server.taskHeaders.length === 2);
     assert.deepEqual(server.taskHeaders, [`Bearer ${firstAccessToken}`, "Bearer accepted-token-b"]);
+    assert.equal(endpoint.requests.length, 2);
+  } finally {
+    await worker.close();
+    console.error = previousConsoleError;
+    await server.close();
+    await endpoint.close();
+  }
+});
+
+test("ApiKeyCredential backs off after a second Worker poll token rejection", async () => {
+  const endpoint = await startTokenEndpoint((index) => tokenResponse(index === 1 ? firstAccessToken : "rejected-token-b", 60));
+  const server = await startServer({ rejectPoll: () => true });
+  const credential = new ApiKeyCredential({ tokenUrl: endpoint.url, serverId: "dex-server", apiKey });
+  const previousConsoleError = console.error;
+  console.error = () => {};
+  const worker = new Worker(new Registry([]), {} as BlobCache, {
+    serverAddress: server.address,
+    credential,
+    pull: { stopDrainTimeoutMs: 100 },
+  });
+  try {
+    await worker.start();
+    await until(() => server.taskHeaders.length === 2);
+    const pullWorker = (worker as unknown as { pullWorker: { streams: Set<{ retryTimer?: ReturnType<typeof setTimeout> }> } }).pullWorker;
+    await until(() => [...pullWorker.streams].some((poll) => poll.retryTimer !== undefined));
+    assert.deepEqual(server.taskHeaders, [`Bearer ${firstAccessToken}`, "Bearer rejected-token-b"]);
     assert.equal(endpoint.requests.length, 2);
   } finally {
     await worker.close();
