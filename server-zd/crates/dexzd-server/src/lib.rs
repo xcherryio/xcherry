@@ -122,9 +122,14 @@ pub enum ServerError {
         /// Why the node stopped.
         reason: NodeStopReason,
     },
-    /// SIGINT or SIGTERM arrived before the server finished starting; startup was abandoned.
-    #[error("a termination signal arrived during startup")]
-    StartupInterrupted,
+    /// Graceful shutdown abandoned steps that did not finish within their budgets.
+    ///
+    /// The node lease may still be held until it expires when the engine step is listed.
+    #[error("shutdown did not finish: {steps} exceeded their budget")]
+    ShutdownIncomplete {
+        /// Comma-separated names of the abandoned steps, such as `engine`.
+        steps: String,
+    },
     /// A server task ended unexpectedly.
     #[error("server task failed: {detail}")]
     ServingTaskFailed {
@@ -179,9 +184,14 @@ fn serve_until_terminated(
         .map_err(|source| ServerError::AsyncRuntime { source })?;
     runtime.block_on(async {
         let mut termination = TerminationSignals::register();
+        let mut start = std::pin::pin!(start);
         let server = tokio::select! {
-            started = start => started?,
-            () = termination.received() => return Err(ServerError::StartupInterrupted),
+            started = &mut start => started?,
+            () = termination.received() => {
+                // Dropping a startup that holds the node lease would keep the lease until it expires.
+                tracing::info!("termination signal during startup; stopping once startup finishes");
+                return start.await?.shutdown().await;
+            }
         };
         let shutdown = server.shutdown_token();
         let signals = tokio::spawn(async move {

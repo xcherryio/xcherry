@@ -108,8 +108,39 @@ impl S3Emulator {
             .common_prefixes
     }
 
+    /// Returns whether `bucket` holds an object whose key starts with `prefix`.
+    pub(crate) fn has_object_under(&self, bucket: &str, prefix: &str) -> bool {
+        !self
+            .store
+            .list_objects(
+                bucket,
+                &ListObjectsRequest {
+                    prefix: prefix.to_owned(),
+                    delimiter: String::new(),
+                    max_keys: 1,
+                    continuation_token: None,
+                    start_after: None,
+                },
+            )
+            .expect("the emulator lists objects")
+            .objects
+            .is_empty()
+    }
+
+    /// Replaces the emulator's fault rules with `rules`, a JSON array of s3mock fault rules.
+    pub(crate) async fn set_fault_rules(&self, rules: &str) {
+        let response = self
+            .admin_request("PUT", "/_s3mock/faults", &format!(r#"{{"rules":{rules}}}"#))
+            .await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+
     /// Returns the emulator's JSON log of recent requests.
     pub(crate) async fn request_log(&self) -> String {
+        self.admin_request("GET", "/_s3mock/requests", "").await
+    }
+
+    async fn admin_request(&self, method: &str, path: &str, body: &str) -> String {
         let address = self.server.local_address();
         let mut stream = tokio::net::TcpStream::connect(address)
             .await
@@ -117,7 +148,8 @@ impl S3Emulator {
         stream
             .write_all(
                 format!(
-                    "GET /_s3mock/requests HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+                    "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 )
                 .as_bytes(),
             )

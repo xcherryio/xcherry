@@ -132,10 +132,21 @@ pub(crate) struct SearchProjection {
 }
 
 impl SearchProjection {
-    pub(crate) async fn shutdown(self) {
+    /// Stops the projection, aborting it when it does not stop within `budget`.
+    ///
+    /// Returns false when the projection had to be aborted.
+    pub(crate) async fn shutdown(mut self, budget: Duration) -> bool {
         self.stop.cancel();
-        if let Err(error) = self.task.await {
-            tracing::warn!(%error, "the search projection task failed");
+        match tokio::time::timeout(budget, &mut self.task).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "the search projection task failed");
+                true
+            }
+            Err(_) => {
+                self.task.abort();
+                false
+            }
         }
     }
 }
@@ -160,4 +171,28 @@ fn postgres_configuration(search: &SearchConfig) -> Result<tokio_postgres::Confi
         configuration.options(options);
     }
     Ok(configuration)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only the lease owner may project, so a projection that ignores cancellation must end before release.
+    #[tokio::test(start_paused = true)]
+    async fn a_projection_that_ignores_cancellation_is_aborted() {
+        let (liveness, mut is_alive) = mpsc::channel::<()>(1);
+        let task = tokio::spawn(async move {
+            let _liveness = liveness;
+            std::future::pending::<()>().await;
+        });
+        let projection = SearchProjection {
+            stop: CancellationToken::new(),
+            task,
+        };
+        assert!(!projection.shutdown(Duration::from_secs(1)).await);
+        assert!(
+            is_alive.recv().await.is_none(),
+            "the aborted task released its state"
+        );
+    }
 }

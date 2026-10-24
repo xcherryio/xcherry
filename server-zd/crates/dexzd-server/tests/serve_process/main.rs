@@ -248,6 +248,76 @@ async fn losing_the_lease_exits_non_zero() {
     primary.shutdown().await;
 }
 
+/// SIGTERM after the node took its lease finishes recovery, exits 0, and releases the lease.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sigterm_during_recovery_exits_zero_and_releases_the_lease() {
+    let primary = S3Emulator::start(PRIMARY_BUCKET, SignatureVerification::Strict).await;
+    let primary_endpoint = primary.endpoint();
+    let directory = TempDir::new().expect("a temporary test directory can be created");
+    // Only recovery reads the log, after the lease is taken, so slow reads hold startup there.
+    primary
+        .set_fault_rules(&format!(
+            r#"[{{"operation":"GetObject","key_prefix":"{PRIMARY_PREFIX}/log/","action":{{"type":"delay","milliseconds":2000}}}}]"#
+        ))
+        .await;
+    let first_address = free_loopback_address();
+    let first_config = directory.path().join("first.yaml");
+    ServeConfig {
+        primary_endpoint: &primary_endpoint,
+        hard_delete_endpoint: None,
+        listen: first_address,
+        local_directory: &directory.path().join("first-store"),
+        lease_duration: HELD_LEASE_DURATION,
+        fail_if_held: true,
+        parade_db: None,
+    }
+    .write(&first_config);
+    let mut first = ServeProcess::spawn(
+        &first_config,
+        first_address,
+        directory.path().join("first.log"),
+    );
+    let lease_prefix = format!("{PRIMARY_PREFIX}/lease/");
+    tokio::time::timeout(SEARCH_BUDGET, async {
+        while !primary.has_object_under(PRIMARY_BUCKET, &lease_prefix) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the node takes its lease");
+    let first_status = first.terminate(SHUTDOWN_BUDGET).await;
+    let first_log = first.log();
+    assert_eq!(first_status.code(), Some(0), "{first_log}");
+    assert!(
+        first_log.contains("termination signal during startup"),
+        "{first_log}"
+    );
+    assert!(first_log.contains("engine node stopped"), "{first_log}");
+    primary.set_fault_rules("[]").await;
+
+    let second_address = free_loopback_address();
+    let second_config = directory.path().join("second.yaml");
+    ServeConfig {
+        primary_endpoint: &primary_endpoint,
+        hard_delete_endpoint: None,
+        listen: second_address,
+        local_directory: &directory.path().join("second-store"),
+        lease_duration: HELD_LEASE_DURATION,
+        fail_if_held: true,
+        parade_db: None,
+    }
+    .write(&second_config);
+    let mut second = ServeProcess::spawn(
+        &second_config,
+        second_address,
+        directory.path().join("second.log"),
+    );
+    second.wait_until_serving().await;
+    let second_status = second.terminate(SHUTDOWN_BUDGET).await;
+    assert_eq!(second_status.code(), Some(0), "{}", second.log());
+    primary.shutdown().await;
+}
+
 /// ParadeDB SearchFlows reads committed Flows, and a new process rebuilds a cleared projection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn paradedb_search_projects_commits_and_rebuilds_on_startup() {

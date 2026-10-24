@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+mod bounded_teardown;
 mod client_deadline;
 mod search_projection;
 
@@ -43,12 +44,18 @@ use crate::worker_rpc_invoker::PullWorkerRpcInvoker;
 
 pub(crate) use search_projection::CommittedSearchFrames;
 
+use bounded_teardown::BoundedTeardown;
 use search_projection::{ParadeDbSearch, SearchProjection};
 
-/// Total time allowed for a graceful shutdown before remaining work is abandoned.
-const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
 /// Part of the budget for open calls, so the engine still stops cleanly after a stuck call.
 const GRPC_DRAIN_BUDGET: Duration = Duration::from_secs(4);
+/// Shutdown budgets of the later steps; with the gRPC drain they total ten seconds.
+const EFFECT_TASKS_STOP_BUDGET: Duration = Duration::from_secs(1);
+const SEARCH_PROJECTION_STOP_BUDGET: Duration = Duration::from_secs(1);
+/// Covers the engine's three-second task stop and its lease release.
+const ENGINE_STOP_BUDGET: Duration = Duration::from_millis(3_500);
+const STREAM_STORE_CLOSE_BUDGET: Duration = Duration::from_millis(250);
+const EMBEDDED_S3_STOP_BUDGET: Duration = Duration::from_millis(250);
 /// gRPC keepalive, equal to the Go Server's.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -71,7 +78,8 @@ impl RunningServer {
     /// Stops gracefully within ten seconds and returns how serving ended.
     ///
     /// Returns [`ServerError::NodeStopped`] when the node had already stopped for another reason,
-    /// such as a lost lease.
+    /// such as a lost lease, and [`ServerError::ShutdownIncomplete`] when a shutdown step overran
+    /// its budget.
     pub async fn shutdown(self) -> Result<(), ServerError> {
         self.shutdown_request.cancel();
         self.wait().await
@@ -272,10 +280,16 @@ impl ServerNode {
                     engine.wait_for_stop(),
                 )),
             ),
-            None => (
-                Some(builtin_search_backend(config, &engine, partition_count)?),
-                None,
-            ),
+            None => match builtin_search_backend(config, &engine, partition_count) {
+                Ok(search_backend) => (Some(search_backend), None),
+                Err(error) => {
+                    registry.close_long_polls();
+                    effect_tasks.shutdown().await;
+                    engine.shutdown().await;
+                    close_stream_store(&stream_store).await;
+                    return Err(error);
+                }
+            },
         };
         let flow_service = DexFlowService::new(
             &components.flow_service,
@@ -365,45 +379,58 @@ impl ServerNode {
             Ok(()) => tracing::info!("dex-server-zd shutting down"),
             Err(error) => tracing::error!(%error, "dex-server-zd stopping after a failure"),
         }
-        let teardown = async {
-            health.set_not_serving().await;
-            dispatch.shutdown();
-            registry.close_long_polls();
-            grpc_stop.cancel();
-            if !grpc_server.is_finished() {
-                match tokio::time::timeout(GRPC_DRAIN_BUDGET, &mut grpc_server).await {
-                    Ok(Ok(Ok(()))) => {}
-                    Ok(Ok(Err(error))) => {
-                        tracing::warn!(%error, "gRPC server stopped with an error");
-                    }
-                    Ok(Err(error)) => tracing::warn!(%error, "gRPC server task failed"),
-                    Err(_) => {
-                        tracing::warn!("open gRPC calls did not finish in time; closing them");
-                        grpc_server.abort();
-                    }
+        let mut teardown = BoundedTeardown::default();
+        health.set_not_serving().await;
+        dispatch.shutdown();
+        registry.close_long_polls();
+        grpc_stop.cancel();
+        if !grpc_server.is_finished() {
+            match tokio::time::timeout(GRPC_DRAIN_BUDGET, &mut grpc_server).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(error))) => {
+                    tracing::warn!(%error, "gRPC server stopped with an error");
+                }
+                Ok(Err(error)) => tracing::warn!(%error, "gRPC server task failed"),
+                Err(_) => {
+                    tracing::warn!("open gRPC calls did not finish in time; closing them");
+                    grpc_server.abort();
                 }
             }
-            effect_tasks.shutdown().await;
-            if let Some(search_projection) = search_projection {
-                search_projection.shutdown().await;
-            }
-            engine.shutdown().await;
-            close_stream_store(&stream_store).await;
-            if let Some(embedded_s3) = embedded_s3 {
-                embedded_s3.shutdown().await;
-            }
-        };
-        if tokio::time::timeout(SHUTDOWN_BUDGET, teardown)
-            .await
-            .is_err()
-        {
-            grpc_server.abort();
-            tracing::error!(
-                budget_seconds = SHUTDOWN_BUDGET.as_secs(),
-                "graceful shutdown exceeded its budget; remaining work was abandoned"
-            );
         }
-        outcome
+        teardown
+            .run(
+                "effect tasks",
+                EFFECT_TASKS_STOP_BUDGET,
+                effect_tasks.shutdown(),
+            )
+            .await;
+        if let Some(search_projection) = search_projection
+            && !search_projection
+                .shutdown(SEARCH_PROJECTION_STOP_BUDGET)
+                .await
+        {
+            teardown.record_overrun("search projection", SEARCH_PROJECTION_STOP_BUDGET);
+        }
+        teardown
+            .run("engine", ENGINE_STOP_BUDGET, engine.shutdown())
+            .await;
+        teardown
+            .run(
+                "Stream Store",
+                STREAM_STORE_CLOSE_BUDGET,
+                close_stream_store(&stream_store),
+            )
+            .await;
+        if let Some(embedded_s3) = embedded_s3 {
+            teardown
+                .run(
+                    "embedded S3",
+                    EMBEDDED_S3_STOP_BUDGET,
+                    embedded_s3.shutdown(),
+                )
+                .await;
+        }
+        teardown.finish(outcome)
     }
 }
 
