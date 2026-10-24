@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +17,6 @@ use dexzd_engine::{
 use dexzd_log::{DecodedBatch, decode_batch};
 use dexzd_object_store::{ObjectStore, ObjectStoreOperation};
 use dexzd_storage::RocksDbStoreOptions;
-use tokio::task::JoinHandle;
 
 use crate::harness::{CountingApplier, RecordingRuntime, TestCluster, TestNode};
 
@@ -97,7 +97,7 @@ async fn take_over_after_log_cleanup(
         .expect("first snapshot succeeds");
     let first_unsnapshotted_seq = last_seq_of_epoch(cluster, serving_epoch).await + 1;
 
-    let standby = spawn_node(cluster, standby_config);
+    let standby = tokio::spawn(start_node(cluster, standby_config));
     while cluster
         .faults
         .count_operations(ObjectStoreOperation::Get, |key| key == LEASE_KEY)
@@ -156,15 +156,15 @@ async fn take_over_after_log_cleanup(
     standby.node.shutdown().await;
 }
 
-/// Starts a node in a task, so the test can act while it waits for the lease.
-fn spawn_node(
+/// Returns a node start that owns its inputs, so a task can run it while the test acts.
+fn start_node(
     cluster: &TestCluster,
     config: EngineNodeConfig,
-) -> JoinHandle<Result<TestNode, EngineStartError>> {
+) -> impl Future<Output = Result<TestNode, EngineStartError>> + Send + 'static {
     let object_store = cluster.object_store.clone();
     let clock = cluster.clock.clone();
     let hasher = cluster.hasher.clone();
-    tokio::spawn(async move {
+    async move {
         let applier = Arc::new(CountingApplier::default());
         let runtime = Arc::new(RecordingRuntime::default());
         let factory_runtime = runtime.clone();
@@ -187,7 +187,7 @@ fn spawn_node(
             runtime,
             hasher,
         })
-    })
+    }
 }
 
 async fn recorded_epoch(cluster: &TestCluster) -> u64 {
