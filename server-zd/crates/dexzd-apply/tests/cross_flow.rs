@@ -219,6 +219,7 @@ impl Harness {
                 invocation: Some(invocation.clone()),
                 attempt: 1,
                 task_id: vec![9; 16],
+                pull_routing: None,
             }),
         ));
         self.apply(
@@ -512,6 +513,7 @@ fn wait_for_starts_child_and_completion_wakes_parent() {
             invocation: Some(invocation.clone()),
             attempt: 1,
             task_id: vec![9; 16],
+            pull_routing: None,
         }),
     ));
     let input_text = "child input".repeat(100);
@@ -1266,6 +1268,7 @@ fn default_reuse_returns_completed_child_without_new_run() {
             invocation: Some(invocation.clone()),
             attempt: 1,
             task_id: vec![8; 16],
+            pull_routing: None,
         }),
     ));
     assert_ok(&harness.apply(
@@ -1339,6 +1342,7 @@ fn every_terminal_child_status_reports_to_parent() {
                         invocation: Some(invocation.clone()),
                         attempt: 1,
                         task_id: [8; 16].to_vec(),
+                        pull_routing: None,
                     }),
                 );
                 if expected_status == FlowStatus::Completed {
@@ -1716,6 +1720,7 @@ fn invalid_child_parameters_fail_parent_without_wait_effects() {
             invocation: Some(invocation.clone()),
             attempt: 1,
             task_id: vec![9; 16],
+            pull_routing: None,
         }),
     ));
     assert_ok(&harness.apply(

@@ -332,6 +332,7 @@ impl Harness {
             invocation: Some(key(step_execution_id, method)),
             attempt,
             task_id: vec![attempt as u8; 16],
+            pull_routing: None,
         }));
         assert!(
             !outcome.writes.is_empty(),

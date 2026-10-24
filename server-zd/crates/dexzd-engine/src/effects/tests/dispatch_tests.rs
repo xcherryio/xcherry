@@ -14,7 +14,8 @@ use dexzd_keyspace::row_keys::{run_named_key, run_singleton_key};
 use dexzd_keyspace::{ColumnFamily, RunTable};
 use dexzd_protocol::dex::{
     AttributeWrite, CloseDecision, CloseDecisionType, FlowStatus, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodResponse, StepDecision, StepOptions, StopFlowRequest,
+    InvokeWaitForMethodResponse, PullRouting, PullRoutingSource, StepDecision, StepOptions,
+    StopFlowRequest,
 };
 use dexzd_protocol::dexzd::v1::{
     FlowCommand, FlowStopCommand, StepAttemptFailureKind, StepInvocationKey, StepMethod,
@@ -113,6 +114,84 @@ async fn sync_wait_for_and_execute_dispatch_with_go_server_context_and_complete_
     harness.shutdown().await;
 }
 
+fn routing(sticky: &str, served_by: &str, source: PullRoutingSource) -> PullRouting {
+    PullRouting {
+        sticky_app_worker_id: sticky.to_owned(),
+        served_by_app_worker_id: served_by.to_owned(),
+        source: source as i32,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn starts_record_the_dispatch_routing_and_results_the_serving_worker() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    harness.start_flow(start_request("order-1"), settings());
+    let wait_for = harness.dispatcher.next_dispatch().await;
+    wait_for.complete_wait_for(InvokeWaitForMethodResponse::default());
+    let execute = harness.dispatcher.next_dispatch().await;
+    execute.complete_execute(force_complete());
+    harness.settle().await;
+
+    let start_routings: Vec<_> = harness
+        .runtime
+        .commands_matching(|command| {
+            matches!(command, flow_command::Command::StepAttemptStarted(_))
+        })
+        .into_iter()
+        .filter_map(|recorded| match recorded.command.command {
+            Some(flow_command::Command::StepAttemptStarted(started)) => started.pull_routing,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        start_routings,
+        vec![
+            routing("", "", PullRoutingSource::Unspecified),
+            routing("worker-a", "", PullRoutingSource::Unspecified),
+        ]
+    );
+    let result_routings: Vec<_> = harness
+        .runtime
+        .commands_matching(is_method_completed)
+        .into_iter()
+        .filter_map(|recorded| match recorded.command.command {
+            Some(flow_command::Command::StepMethodCompleted(completed)) => completed.pull_routing,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        result_routings,
+        vec![
+            routing("", "worker-a", PullRoutingSource::FlowTypeQueue),
+            routing("worker-a", "worker-a", PullRoutingSource::StickyQueue),
+        ]
+    );
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_start_waits_until_the_run_routing_is_readable() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    harness
+        .runtime
+        .is_flow_state_unreadable
+        .store(true, Ordering::SeqCst);
+    harness.start_flow(start_request("order-1"), settings());
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    harness.settle().await;
+    assert!(harness.dispatcher.try_next_dispatch().await.is_none());
+
+    harness
+        .runtime
+        .is_flow_state_unreadable
+        .store(false, Ordering::SeqCst);
+    let dispatch = harness.dispatcher.next_dispatch().await;
+    assert_eq!(dispatch.context().attempt, 1);
+    harness.shutdown().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn worker_error_fails_the_attempt_and_the_backoff_timer_dispatches_attempt_two() {
     let harness = EffectHarness::new();
@@ -173,23 +252,46 @@ async fn method_timeout_cancels_the_dispatch_and_fails_the_attempt() {
     harness.shutdown().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn heartbeat_timeout_starts_after_the_dispatch_wait_and_each_frame_extends_it() {
-    let config = EffectsConfig {
-        dispatch_wait: Duration::from_secs(10),
-        ..EffectsConfig::default()
-    };
-    let harness = EffectHarness::with_config(super::DurableState::new(), config);
-    harness.rebuild_all_partitions().await;
+fn start_with_heartbeat_timeout(harness: &EffectHarness, heartbeat_timeout_seconds: i32) {
     let mut request = start_request("order-1");
     request.step_options = Some(StepOptions {
-        heartbeat_timeout_seconds: 20,
+        heartbeat_timeout_seconds,
         ..StepOptions::default()
     });
     harness.start_flow(request, settings());
+}
+
+#[tokio::test(start_paused = true)]
+async fn heartbeat_timeout_starts_when_the_worker_receives_the_task() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    start_with_heartbeat_timeout(&harness, 10);
     let dispatch = harness.dispatcher.next_dispatch().await;
 
-    tokio::time::sleep(Duration::from_secs(29)).await;
+    // The Worker received the task at once and sends nothing, like a SYNC Step that sleeps 12s.
+    tokio::time::sleep(Duration::from_millis(9_900)).await;
+    harness.settle().await;
+    assert!(failures(&harness).is_empty());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    harness.settle().await;
+    let failures = failures(&harness);
+    assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0].0,
+        StepAttemptFailureKind::HeartbeatTimeout as i32
+    );
+    assert!(dispatch.is_cancelled.load(Ordering::SeqCst));
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_worker_frame_extends_the_heartbeat_timeout() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    start_with_heartbeat_timeout(&harness, 20);
+    let dispatch = harness.dispatcher.next_dispatch().await;
+
+    tokio::time::sleep(Duration::from_secs(19)).await;
     dispatch.send_wait_for_heartbeat(None);
     tokio::time::sleep(Duration::from_secs(19)).await;
     harness.settle().await;
@@ -198,6 +300,47 @@ async fn heartbeat_timeout_starts_after_the_dispatch_wait_and_each_frame_extends
         "the heartbeat extended the timeout"
     );
     tokio::time::sleep(Duration::from_secs(2)).await;
+    harness.settle().await;
+    assert_eq!(
+        failures(&harness)[0].0,
+        StepAttemptFailureKind::HeartbeatTimeout as i32
+    );
+    assert!(dispatch.is_cancelled.load(Ordering::SeqCst));
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn matching_waits_do_not_count_against_the_heartbeat_timeout() {
+    let harness = EffectHarness::new();
+    harness
+        .dispatcher
+        .is_assignment_manual
+        .store(true, Ordering::SeqCst);
+    harness.rebuild_all_partitions().await;
+    start_with_heartbeat_timeout(&harness, 10);
+    let dispatch = harness.dispatcher.next_dispatch().await;
+
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    harness.settle().await;
+    assert!(
+        failures(&harness).is_empty(),
+        "no Worker holds the task yet"
+    );
+    dispatch.assign("worker-a");
+    tokio::time::sleep(Duration::from_secs(9)).await;
+    // The Worker rejects the task before any output, and matching continues.
+    dispatch.unassign();
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    harness.settle().await;
+    assert!(
+        failures(&harness).is_empty(),
+        "the rejection stopped the timeout"
+    );
+    dispatch.assign("worker-b");
+    tokio::time::sleep(Duration::from_millis(9_900)).await;
+    harness.settle().await;
+    assert!(failures(&harness).is_empty());
+    tokio::time::sleep(Duration::from_millis(200)).await;
     harness.settle().await;
     assert_eq!(
         failures(&harness)[0].0,
@@ -686,9 +829,10 @@ async fn a_restored_running_attempt_is_redispatched_after_its_original_dispatch_
 async fn an_unreadable_attempt_state_times_out_the_method_and_releases_its_locks() {
     let harness = EffectHarness::new();
     harness.rebuild_all_partitions().await;
+    // Like the production runtime, a start reads state, so the outage begins once it commits.
     harness
         .runtime
-        .is_flow_state_unreadable
+        .is_flow_state_unreadable_after_start
         .store(true, Ordering::SeqCst);
     let mut request = start_request("order-1");
     request.step_options = Some(StepOptions {

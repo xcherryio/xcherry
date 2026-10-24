@@ -220,6 +220,7 @@ impl Harness {
             invocation: Some(invocation_key(step_execution_id, method)),
             attempt,
             task_id: vec![attempt as u8; 16],
+            pull_routing: None,
         }));
         assert!(is_ok(&outcome.reply), "attempt start: {:?}", outcome.reply);
     }

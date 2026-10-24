@@ -31,9 +31,10 @@ use dexzd_keyspace::{ColumnFamily, PartitionHasher, PartitionId, RunId, RunTable
 use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, ObjectStoreOperation};
 use dexzd_protocol::dex::{
     FlowTimeoutPolicy, InvokeExecuteMethodOutput, InvokeExecuteMethodResponse,
-    InvokeWaitForMethodOutput, InvokeWaitForMethodResponse, PollWorkerTaskFrame, StartFlowRequest,
-    StepMethodHeartbeat, StepStreamWrite, Value, WorkerErrorResponse, WorkerTarget,
-    invoke_execute_method_output, invoke_wait_for_method_output, poll_worker_task_frame, value,
+    InvokeWaitForMethodOutput, InvokeWaitForMethodResponse, PollWorkerTaskFrame, PullRouting,
+    StartFlowRequest, StepMethodHeartbeat, StepStreamWrite, Value, WorkerErrorResponse,
+    WorkerTarget, invoke_execute_method_output, invoke_wait_for_method_output,
+    poll_worker_task_frame, value,
 };
 use dexzd_protocol::dexzd::v1::{
     CommandErrorReply, CommandReply, EmptyReply, FlowCommand, FlowStartCommand, RunRecord,
@@ -182,6 +183,8 @@ pub(super) struct ApplyRuntime {
     pub(super) unavailable_proposals: AtomicUsize,
     /// Makes `flow_state_reader` fail as unavailable; committed reads still succeed.
     pub(super) is_flow_state_unreadable: AtomicBool,
+    /// Sets `is_flow_state_unreadable` once an attempt start commits.
+    pub(super) is_flow_state_unreadable_after_start: AtomicBool,
     overrides: Mutex<Vec<CommandOverride>>,
 }
 
@@ -299,6 +302,7 @@ impl EffectRuntime for ApplyRuntime {
         invocation: &'a StepInvocationKey,
         attempt: u32,
         task_id: Vec<u8>,
+        pull_routing: PullRouting,
     ) -> BoxFuture<'a, Result<InvocationStartOutcome, EffectRuntimeError>> {
         Box::pin(async move {
             let run = RunLocation {
@@ -328,16 +332,22 @@ impl EffectRuntime for ApplyRuntime {
                         invocation: Some(invocation.clone()),
                         attempt,
                         task_id,
+                        pull_routing: Some(pull_routing),
                     },
                 )),
                 ..FlowCommand::default()
             };
             let reply = self.commit(flow, command, CommitUrgency::Prompt)?;
-            Ok(if is_error_reply(&reply) {
-                InvocationStartOutcome::Stale
-            } else {
-                InvocationStartOutcome::Started
-            })
+            if is_error_reply(&reply) {
+                return Ok(InvocationStartOutcome::Stale);
+            }
+            if self
+                .is_flow_state_unreadable_after_start
+                .load(Ordering::SeqCst)
+            {
+                self.is_flow_state_unreadable.store(true, Ordering::SeqCst);
+            }
+            Ok(InvocationStartOutcome::Started)
         })
     }
 
@@ -399,6 +409,22 @@ impl FakeDispatch {
             MethodRequest::Execute(request) => request.context.clone(),
         }
         .expect("requests carry a Context")
+    }
+
+    /// Reports that `app_worker_id` received the task.
+    pub(super) fn assign(&self, app_worker_id: &str) {
+        self.events
+            .send(DispatchEvent::Assigned {
+                app_worker_id: app_worker_id.to_owned(),
+            })
+            .expect("the attempt listens");
+    }
+
+    /// Reports that the assigned Worker rejected the task before any output.
+    pub(super) fn unassign(&self) {
+        self.events
+            .send(DispatchEvent::Unassigned)
+            .expect("the attempt listens");
     }
 
     pub(super) fn send_frame(&self, frame: PollWorkerTaskFrame) {
@@ -498,6 +524,8 @@ pub(super) struct FakeDispatcher {
     receiver: tokio::sync::Mutex<mpsc::UnboundedReceiver<FakeDispatch>>,
     pub(super) dispatch_count: AtomicUsize,
     pub(super) refuse_dispatch: AtomicBool,
+    /// When set, the test reports the assignment; otherwise `worker-a` receives every task at once.
+    pub(super) is_assignment_manual: AtomicBool,
 }
 
 impl FakeDispatcher {
@@ -508,6 +536,7 @@ impl FakeDispatcher {
             receiver: tokio::sync::Mutex::new(receiver),
             dispatch_count: AtomicUsize::new(0),
             refuse_dispatch: AtomicBool::new(false),
+            is_assignment_manual: AtomicBool::new(false),
         }
     }
 
@@ -543,6 +572,9 @@ impl MethodDispatcher for FakeDispatcher {
             events,
             is_cancelled: Arc::clone(&is_cancelled),
         };
+        if !self.is_assignment_manual.load(Ordering::SeqCst) {
+            dispatch.assign("worker-a");
+        }
         self.dispatches
             .lock()
             .expect("lock")
@@ -662,6 +694,7 @@ impl EffectHarness {
             busy_lock_keys: Mutex::new(BTreeSet::new()),
             unavailable_proposals: AtomicUsize::new(0),
             is_flow_state_unreadable: AtomicBool::new(false),
+            is_flow_state_unreadable_after_start: AtomicBool::new(false),
             overrides: Mutex::new(Vec::new()),
         });
         let tasks = tasks.start(Arc::clone(&runtime) as _);
