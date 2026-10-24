@@ -38,6 +38,13 @@ pub trait EngineIdSource: Send + Sync + 'static {
 
     /// Returns a new UUIDv7 that names the task of one dispatched method attempt.
     fn dispatch_task_id(&self) -> Uuid;
+
+    /// Returns a new UUIDv7 for a store created empty or restored from a snapshot; the engine
+    /// replaces it with [`Self::lineage_id`] before the store's first upload.
+    fn store_lineage_id(&self) -> Uuid;
+
+    /// Returns the process ID that the node lease names as its holder.
+    fn lease_holder_process_id(&self) -> String;
 }
 
 /// [`EngineIdSource`] backed by the system clock and random numbers.
@@ -71,6 +78,14 @@ impl EngineIdSource for SystemEngineIdSource {
 
     fn dispatch_task_id(&self) -> Uuid {
         Uuid::now_v7()
+    }
+
+    fn store_lineage_id(&self) -> Uuid {
+        Uuid::now_v7()
+    }
+
+    fn lease_holder_process_id(&self) -> String {
+        Uuid::new_v4().to_string()
     }
 }
 
@@ -136,6 +151,14 @@ impl EngineIdSource for SeededEngineIdSourceForTest {
 
     fn dispatch_task_id(&self) -> Uuid {
         self.next_uuid_v7()
+    }
+
+    fn store_lineage_id(&self) -> Uuid {
+        self.next_uuid_v7()
+    }
+
+    fn lease_holder_process_id(&self) -> String {
+        self.next_uuid_v7().to_string()
     }
 }
 

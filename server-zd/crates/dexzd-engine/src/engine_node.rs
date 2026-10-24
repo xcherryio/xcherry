@@ -145,11 +145,12 @@ impl EngineNode {
         let cluster_id = unleased_metadata.cluster_id()?;
         let Some(lease) = config
             .lease
-            .acquire_until_cancelled(
+            .acquire_until_cancelled_with_holder_process_id(
                 object_store.clone(),
                 clock.clone(),
                 &config.node,
                 cancellation,
+                id_source.lease_holder_process_id(),
             )
             .await?
         else {
@@ -190,6 +191,7 @@ impl EngineNode {
                     snapshot: metadata.node_snapshot(&config.node.node_id),
                     streams: &metadata.streams,
                     partition_count,
+                    new_store_lineage_id: id_source.store_lineage_id(),
                 },
             )
             .await?;

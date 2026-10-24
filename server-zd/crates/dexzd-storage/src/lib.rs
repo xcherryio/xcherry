@@ -21,7 +21,7 @@ pub use memory_store::InMemoryLocalStore;
 pub use rocksdb_store::{RocksDbLocalStore, RocksDbStoreOptions};
 pub use snapshot::{
     DEFAULT_SNAPSHOT_RETENTION, RestoredLocalStore, SnapshotIdentity, SnapshotSource,
-    create_snapshot, restore_snapshot, retain_snapshots,
+    create_snapshot, restore_snapshot, restore_snapshot_with_lineage_id, retain_snapshots,
 };
 
 #[cfg(test)]

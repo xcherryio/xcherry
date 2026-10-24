@@ -121,5 +121,5 @@ DEXZD_SIMULATION_SEED=7 cargo test -p dexzd-simulation --test engine_simulation 
 `DEXZD_SIMULATION_SEEDS` and `DEXZD_SIMULATION_SEED` also select the apply simulation's seeds
 when both tests run. A failing seed prints its reproduction command and the last 400 trace events.
 `DEXZD_SIMULATION_PRINT_EVENTS=1` prints the trace tail of a passing seed. A self-test runs seeds
-twice and requires identical raw traces, final local stores, and stored objects. Lease holder
-IDs are the one exception: the cluster metadata crate mints them outside the engine.
+twice and requires identical raw traces, final local stores, and stored objects, leases
+included.

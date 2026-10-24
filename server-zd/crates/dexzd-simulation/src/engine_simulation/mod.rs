@@ -26,8 +26,6 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use dexzd_engine::EngineLocalStore;
-use dexzd_protocol::dexzd::v1::NodeLease;
-use prost::Message;
 
 use crate::invariants::InvariantViolation;
 
@@ -264,10 +262,7 @@ impl EngineSimulationFinalState {
         let keys: std::collections::BTreeSet<&String> =
             self.objects.keys().chain(other.objects.keys()).collect();
         keys.into_iter()
-            .find(|key| {
-                comparable_object(key, self.objects.get(*key))
-                    != comparable_object(key, other.objects.get(*key))
-            })
+            .find(|key| self.objects.get(*key) != other.objects.get(*key))
             .map(|key| {
                 format!(
                     "object {key} differs: {:?} vs {:?} bytes",
@@ -276,17 +271,6 @@ impl EngineSimulationFinalState {
                 )
             })
     }
-}
-
-/// Returns the object as compared between runs; lease holder IDs are random outside the engine.
-fn comparable_object(key: &str, object: Option<&Bytes>) -> Option<Bytes> {
-    let object = object?;
-    if !key.starts_with("lease/") {
-        return Some(object.clone());
-    }
-    let mut lease = NodeLease::decode(object.clone()).expect("stored leases decode");
-    lease.holder_process_id.clear();
-    Some(Bytes::from(lease.encode_to_vec()))
 }
 
 /// Runs one seed on a new current-thread runtime with paused time.

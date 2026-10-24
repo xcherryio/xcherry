@@ -14,7 +14,7 @@ use dexzd_object_store::ObjectStore;
 use dexzd_protocol::dexzd::v1::SnapshotReference;
 use dexzd_storage::{
     InMemoryLocalStore, LocalReadView, RestoredLocalStore, RocksDbLocalStore, RocksDbStoreOptions,
-    restore_snapshot,
+    restore_snapshot_with_lineage_id,
 };
 use uuid::Uuid;
 
@@ -61,6 +61,8 @@ pub(crate) struct LocalStoreRequirements<'a> {
     pub(crate) snapshot: Option<&'a SnapshotReference>,
     pub(crate) streams: &'a NodeStreams,
     pub(crate) partition_count: u32,
+    /// Lineage of a store this start creates empty or restores from a snapshot.
+    pub(crate) new_store_lineage_id: Uuid,
 }
 
 /// The lowest applied batch over every partition, ordered by incarnation, then seq.
@@ -127,11 +129,12 @@ async fn restore_in_memory(
     Ok(match requirements.snapshot {
         Some(snapshot) => {
             let directory = std::env::temp_dir().join(format!("dexzd-restore-{}", Uuid::now_v7()));
-            let restored = restore_snapshot(
+            let restored = restore_snapshot_with_lineage_id(
                 object_store,
                 &snapshot.manifest_key,
                 &directory,
                 RocksDbStoreOptions::default(),
+                requirements.new_store_lineage_id,
             )
             .await?;
             if matches!(restored, RestoredLocalStore::Memory(_))
@@ -141,7 +144,9 @@ async fn restore_in_memory(
             }
             restored
         }
-        None => RestoredLocalStore::Memory(InMemoryLocalStore::new()),
+        None => RestoredLocalStore::Memory(InMemoryLocalStore::with_lineage_id(
+            requirements.new_store_lineage_id,
+        )),
     })
 }
 
@@ -175,12 +180,21 @@ async fn open_rocksdb_store(
         set_aside(directory)?;
     }
     match requirements.snapshot {
-        Some(snapshot) => {
-            Ok(restore_snapshot(object_store, &snapshot.manifest_key, directory, options).await?)
-        }
-        None => Ok(RestoredLocalStore::RocksDb(RocksDbLocalStore::open(
-            directory, options,
-        )?)),
+        Some(snapshot) => Ok(restore_snapshot_with_lineage_id(
+            object_store,
+            &snapshot.manifest_key,
+            directory,
+            options,
+            requirements.new_store_lineage_id,
+        )
+        .await?),
+        None => Ok(RestoredLocalStore::RocksDb(
+            RocksDbLocalStore::open_with_new_store_lineage_id(
+                directory,
+                options,
+                requirements.new_store_lineage_id,
+            )?,
+        )),
     }
 }
 
