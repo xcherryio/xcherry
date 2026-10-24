@@ -231,17 +231,19 @@ async fn recovery_order_and_voiding_are_exact_under_reordered_get_completion() {
         .expect("sequential recovery succeeds");
     assert_eq!(baseline, expected);
 
-    type DelayOfSeq = Box<dyn Fn(u64) -> Duration + Send + Sync>;
-    let orders: Vec<(&str, fn() -> DelayOfSeq)> = vec![
-        ("reversed", || {
-            Box::new(|seq| Duration::from_millis(200_u64.saturating_sub(seq)))
-        }),
-        ("seed 7", || Box::new(seeded_delay(7))),
-        ("seed 1009", || Box::new(seeded_delay(1_009))),
-    ];
-    for (order, delay_of_seq) in orders {
+    // `None` completes later seqs first; a seed shuffles completion pseudo-randomly.
+    for (order, seed) in [
+        ("reversed", None),
+        ("seed 7", Some(7)),
+        ("seed 1009", Some(1_009)),
+    ] {
         for depth in [2, 32, 64] {
-            let faults = BatchGetFaults::delaying(delay_of_seq());
+            let faults = match seed {
+                None => BatchGetFaults::delaying(|seq| {
+                    Duration::from_millis(200_u64.saturating_sub(seq))
+                }),
+                Some(seed) => BatchGetFaults::delaying(seeded_delay(seed)),
+            };
             let store = store_with(faults, mixed_epoch_log()).await;
             let outcome = recover(&store, 1, 4, read_ahead(depth))
                 .await
