@@ -249,8 +249,8 @@ async fn frozen_owner_is_fenced() {
         standby.log()
     );
 
-    owner.send_signal("STOP").await;
-    // The kill command has exited, so the owner seals nothing after this instant until SIGCONT.
+    owner.freeze_and_wait_until_stopped().await;
+    // The kernel reports the owner stopped, so it seals nothing after this instant until SIGCONT.
     let frozen_at_unix_micros = unix_micros_now();
     let standby_channel = standby.wait_until_serving().await;
     // Steps re-dispatched after the takeover fail and back off while no Worker is connected.
