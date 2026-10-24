@@ -1314,3 +1314,70 @@ fn an_oversized_input_without_a_start_step_type_is_rejected() {
     assert!(is_error(&outcome.reply, 3), "{:?}", outcome.reply);
     assert!(outcome.writes.is_empty());
 }
+
+fn skip_wait_for_movement(step_type: &str) -> StepMovement {
+    StepMovement {
+        step_type: step_type.to_owned(),
+        step_options: Some(StepOptions {
+            skip_wait_for: true,
+            ..StepOptions::default()
+        }),
+        ..StepMovement::default()
+    }
+}
+
+fn go_to(step_types: &[&str]) -> StepDecision {
+    StepDecision {
+        next_steps: step_types
+            .iter()
+            .map(|step_type| skip_wait_for_movement(step_type))
+            .collect(),
+        ..StepDecision::default()
+    }
+}
+
+#[test]
+fn canceling_sibling_steps_spares_the_same_type_under_another_parent() {
+    let mut harness = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.step_options = Some(StepOptions {
+        skip_wait_for: true,
+        ..StepOptions::default()
+    });
+    harness.start(request);
+    harness.start_attempt("ChargeStep-1", StepMethod::Execute, 1);
+    harness.complete_execute(
+        "ChargeStep-1",
+        1,
+        go_to(&["FirstParentStep", "SecondParentStep"]),
+    );
+    harness.start_attempt("FirstParentStep-1", StepMethod::Execute, 1);
+    harness.complete_execute(
+        "FirstParentStep-1",
+        1,
+        go_to(&["WinnerStep", "WaitingStep"]),
+    );
+    harness.start_attempt("SecondParentStep-1", StepMethod::Execute, 1);
+    harness.complete_execute("SecondParentStep-1", 1, go_to(&["WaitingStep"]));
+    harness.start_attempt("WinnerStep-1", StepMethod::Execute, 1);
+
+    harness.complete_execute(
+        "WinnerStep-1",
+        1,
+        StepDecision {
+            cancel_sibling_step_types: vec!["WaitingStep".to_owned()],
+            ..go_to(&["FinalStep"])
+        },
+    );
+
+    assert_eq!(
+        harness.step_execution("WaitingStep-1").phase,
+        StepExecutionPhase::Canceled as i32,
+        "the sibling under FirstParentStep-1 is canceled"
+    );
+    assert_ne!(
+        harness.step_execution("WaitingStep-2").phase,
+        StepExecutionPhase::Canceled as i32,
+        "the same Step type under SecondParentStep-1 keeps running"
+    );
+}
