@@ -22,6 +22,8 @@ use uuid::Uuid;
 
 use crate::{MetadataError, NodeConfig, bump_node_epoch};
 
+const RELEASED_LEASE_EXPIRY_UNIX_MICROS: i64 = i64::MIN;
+
 /// Timing and contention policy for a node lease.
 #[derive(Debug, Clone)]
 pub struct LeaseConfig {
@@ -57,6 +59,9 @@ pub struct LeaseHandle {
     epoch: u64,
     status: watch::Receiver<LeaseStatus>,
     renewal_task: Option<JoinHandle<()>>,
+    store: Arc<dyn ObjectStore>,
+    key: String,
+    holder_process_id: String,
 }
 
 impl LeaseHandle {
@@ -70,7 +75,7 @@ impl LeaseHandle {
         self.status.clone()
     }
 
-    /// Stops lease renewal before shutting down the node.
+    /// Stops lease renewal and releases the lease if this process still owns it.
     pub async fn shutdown(mut self) {
         if let Some(task) = self.renewal_task.take() {
             task.abort();
@@ -78,6 +83,53 @@ impl LeaseHandle {
                 && !error.is_cancelled()
             {
                 tracing::warn!(error = %error, "lease renewal task failed during shutdown");
+            }
+        }
+        if let Err(error) = self.release().await {
+            tracing::warn!(error = %error, "node lease release failed during shutdown");
+        }
+    }
+
+    async fn release(&self) -> Result<(), MetadataError> {
+        loop {
+            let Some(content) = self.store.get(&self.key).await? else {
+                return Ok(());
+            };
+            let mut lease =
+                NodeLease::decode(content.bytes).map_err(|source| MetadataError::Decode {
+                    key: "lease",
+                    source,
+                })?;
+            if lease.holder_process_id != self.holder_process_id
+                || lease.expires_at_unix_micros == RELEASED_LEASE_EXPIRY_UNIX_MICROS
+            {
+                return Ok(());
+            }
+            lease.version = lease
+                .version
+                .checked_add(1)
+                .ok_or(MetadataError::Overflow {
+                    field: "node lease version",
+                })?;
+            lease.expires_at_unix_micros = RELEASED_LEASE_EXPIRY_UNIX_MICROS;
+            let outcome = self
+                .store
+                .put(
+                    &self.key,
+                    Bytes::from(lease.encode_to_vec()),
+                    WriteCondition::ReplaceIfEtagMatches { etag: content.etag },
+                )
+                .await;
+            match outcome {
+                Ok(WriteOutcome::Written { .. }) => return Ok(()),
+                Ok(WriteOutcome::PreconditionFailed) => continue,
+                Err(error) if error.kind == ObjectStoreErrorKind::OutcomeUnknown => {
+                    let current = self.store.get(&self.key).await?;
+                    if current.is_some_and(|current| current.bytes == lease.encode_to_vec()) {
+                        return Ok(());
+                    }
+                }
+                Err(error) => return Err(error.into()),
             }
         }
     }
@@ -238,11 +290,17 @@ pub async fn acquire_lease(
         owner.lease.epoch = epoch;
         owner.renew_before_deadline().await?;
         drop(receiver.borrow_and_update());
+        let handle_store = Arc::clone(&owner.store);
+        let handle_key = owner.key.clone();
+        let holder_process_id = owner.lease.holder_process_id.clone();
         let renewal_task = tokio::spawn(async move { owner.run().await });
         return Ok(LeaseHandle {
             epoch,
             status: receiver,
             renewal_task: Some(renewal_task),
+            store: handle_store,
+            key: handle_key,
+            holder_process_id,
         });
     }
 }
