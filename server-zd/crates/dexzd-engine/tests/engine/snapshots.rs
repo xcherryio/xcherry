@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use dexzd_engine::LocalStoreConfig;
+use dexzd_engine::{LocalStoreConfig, NodeStopReason};
 use dexzd_object_store::{ObjectStore, ObjectStoreOperation, WriteCondition};
 use dexzd_protocol::dexzd::v1::SnapshotManifest;
 use prost::Message;
@@ -328,6 +328,7 @@ async fn retention_deletes_only_old_snapshot_files_without_a_manifest() {
         .expect("upload old orphan");
     test.node.take_snapshot().await.expect("mark old orphan");
     cluster.clock.shift(2 * 60 * 60 * 1_000_000);
+    tokio::time::sleep(Duration::from_secs(4)).await;
     cluster
         .object_store
         .put(
@@ -596,7 +597,7 @@ async fn idle_orphan_cleanup_finishes_paginated_scans() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn idle_orphan_cleanup_stops_before_deleting_a_marked_file() {
+async fn idle_orphan_cleanup_stops_after_losing_the_lease() {
     let mut cluster = TestCluster::new();
     let mut config = cluster.config(LocalStoreConfig::InMemory);
     config.snapshots.deletion_delay = Duration::from_secs(3);
@@ -618,7 +619,11 @@ async fn idle_orphan_cleanup_stops_before_deleting_a_marked_file() {
             .expect("read marked orphan")
             .is_some()
     );
-    test.node.shutdown().await.expect("lease released");
+    cluster.expire_lease_of("node-a").await;
+    assert!(matches!(
+        test.node.wait_for_stop().await,
+        NodeStopReason::LeaseLost { .. }
+    ));
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert!(
         cluster
@@ -628,4 +633,17 @@ async fn idle_orphan_cleanup_stops_before_deleting_a_marked_file() {
             .expect("read stopped orphan")
             .is_some()
     );
+    test.node.shutdown().await.expect("stopped node shuts down");
+
+    let successor = cluster.start_with(&config).await.expect("successor starts");
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(
+        cluster
+            .object_store
+            .get(orphan_key)
+            .await
+            .expect("read successor sweep")
+            .is_none()
+    );
+    successor.node.shutdown().await.expect("lease released");
 }

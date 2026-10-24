@@ -87,7 +87,7 @@ impl SnapshotRetention {
         if !obsolete_manifests.is_empty() {
             // Files follow in a later sweep, so retries find them through the listing after partial manifest deletion.
             for chunk in obsolete_manifests.chunks(LISTING_PAGE_SIZE as usize) {
-                fence.ensure_serving()?;
+                fence.ensure_current_lease().await?;
                 self.object_store.delete_many(chunk).await?;
             }
             for key in &obsolete_manifests {
@@ -99,7 +99,7 @@ impl SnapshotRetention {
             );
         }
         for chunk in orphan_files.chunks(LISTING_PAGE_SIZE as usize) {
-            fence.ensure_serving()?;
+            fence.ensure_current_lease().await?;
             self.object_store.delete_many(chunk).await?;
         }
         if !orphan_files.is_empty() {
@@ -333,7 +333,7 @@ mod tests {
         ByteRange, InMemoryObjectStore, ObjectContent, ObjectListing, ObjectMetadata, ObjectStore,
         ObjectStoreOperation, ObjectStoreResult, WriteCondition, WriteOutcome,
     };
-    use dexzd_protocol::dexzd::v1::{SnapshotFile, SnapshotManifest};
+    use dexzd_protocol::dexzd::v1::{NodeLease, SnapshotFile, SnapshotManifest};
     use prost::Message;
     use uuid::Uuid;
 
@@ -414,6 +414,32 @@ mod tests {
         }
     }
 
+    async fn test_fence(object_store: Arc<dyn ObjectStore>) -> OwnershipFence {
+        let lease = NodeLease {
+            node_id: "node-a".to_owned(),
+            epoch: 1,
+            expires_at_unix_micros: i64::MAX,
+            ..Default::default()
+        };
+        object_store
+            .put(
+                "lease/node-a",
+                Bytes::from(lease.encode_to_vec()),
+                WriteCondition::CreateOnly,
+            )
+            .await
+            .expect("store test lease");
+        let state = Arc::new(CommitState::new(1));
+        assert!(state.start_serving());
+        OwnershipFence {
+            object_store,
+            clock: Arc::new(SystemWallClock),
+            state,
+            node_id: "node-a".to_owned(),
+            epoch: 1,
+        }
+    }
+
     #[tokio::test]
     async fn missing_head_timestamp_resets_rewritten_key_eligibility() {
         let inner = Arc::new(InMemoryObjectStore::new());
@@ -429,15 +455,7 @@ mod tests {
             )
             .await
             .expect("upload first version");
-        let state = Arc::new(CommitState::new(1));
-        assert!(state.start_serving());
-        let fence = OwnershipFence {
-            object_store: object_store.clone(),
-            clock: Arc::new(SystemWallClock),
-            state,
-            node_id: "node-a".to_owned(),
-            epoch: 1,
-        };
+        let fence = test_fence(object_store.clone()).await;
         let retention = SnapshotRetention {
             object_store,
             node_id: "node-a".to_owned(),
@@ -490,15 +508,7 @@ mod tests {
                 .await
                 .expect("upload orphan");
         }
-        let state = Arc::new(CommitState::new(1));
-        assert!(state.start_serving());
-        let fence = OwnershipFence {
-            object_store: object_store.clone(),
-            clock: Arc::new(SystemWallClock),
-            state,
-            node_id: "node-a".to_owned(),
-            epoch: 1,
-        };
+        let fence = test_fence(object_store.clone()).await;
         let retention = SnapshotRetention {
             object_store: object_store.clone(),
             node_id: "node-a".to_owned(),
@@ -551,15 +561,7 @@ mod tests {
             .put(orphan_key, Bytes::new(), WriteCondition::CreateOnly)
             .await
             .expect("upload orphan");
-        let state = Arc::new(CommitState::new(1));
-        assert!(state.start_serving());
-        let fence = OwnershipFence {
-            object_store: object_store.clone(),
-            clock: Arc::new(SystemWallClock),
-            state,
-            node_id: "node-a".to_owned(),
-            epoch: 1,
-        };
+        let fence = test_fence(object_store.clone()).await;
         let retention = SnapshotRetention {
             object_store: object_store.clone(),
             node_id: "node-a".to_owned(),
@@ -594,15 +596,7 @@ mod tests {
             .put(&file_key, Bytes::new(), WriteCondition::CreateOnly)
             .await
             .expect("upload file");
-        let state = Arc::new(CommitState::new(1));
-        assert!(state.start_serving());
-        let fence = OwnershipFence {
-            object_store: object_store.clone(),
-            clock: Arc::new(SystemWallClock),
-            state,
-            node_id: "node-a".to_owned(),
-            epoch: 1,
-        };
+        let fence = test_fence(object_store.clone()).await;
         let retention = SnapshotRetention {
             object_store: object_store.clone(),
             node_id: "node-a".to_owned(),
@@ -658,15 +652,7 @@ mod tests {
             .put(orphan_key, Bytes::new(), WriteCondition::CreateOnly)
             .await
             .expect("upload orphan");
-        let state = Arc::new(CommitState::new(1));
-        assert!(state.start_serving());
-        let fence = OwnershipFence {
-            object_store: object_store.clone(),
-            clock: Arc::new(SystemWallClock),
-            state,
-            node_id: "node-a".to_owned(),
-            epoch: 1,
-        };
+        let fence = test_fence(object_store.clone()).await;
         let retention = SnapshotRetention {
             object_store: object_store.clone(),
             node_id: "node-a".to_owned(),
