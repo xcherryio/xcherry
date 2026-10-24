@@ -382,7 +382,7 @@ impl Workload {
         Ok(())
     }
 
-    /// Panics unless every acknowledged write is on `server` and matches the journal.
+    /// Panics unless every acknowledged write is on the server behind `channel` and matches the journal.
     ///
     /// Panics with the server log as soon as `server` exits.
     pub(crate) async fn verify(
