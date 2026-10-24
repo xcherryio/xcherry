@@ -20,18 +20,25 @@ use dexzd_search::{SearchError, SearchRequest};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Notify, mpsc, watch};
 
+/// Estimated memory of one change besides its encoded document: identifiers and enum layout.
+const CHANGE_OVERHEAD_BYTES: usize = 64;
+
 /// One committed partition frame's search document changes, numbered in commit order.
 pub(crate) struct CommittedSearchFrame {
     pub(crate) sequence: u64,
     pub(crate) partition: PartitionId,
     pub(crate) position: LogPosition,
     pub(crate) changes: Vec<SearchDocumentChange>,
+    /// Estimated memory of `changes`, counted against the queue's byte limit until projected.
+    pub(crate) size_bytes: usize,
 }
 
 /// Feeds committed frames' search document changes to the ParadeDB projection without delaying commits.
 pub(crate) struct CommittedSearchFrames {
     tracking: Mutex<FrameTracking>,
     queue: mpsc::Sender<CommittedSearchFrame>,
+    /// Frames that would raise the queued bytes above this become rebuild requests instead.
+    max_queued_bytes: usize,
     rebuild_requested: Notify,
     /// Highest frame sequence searchable along with all earlier frames; `None` until startup catch-up.
     projected_through: watch::Sender<Option<u64>>,
@@ -41,6 +48,8 @@ pub(crate) struct CommittedSearchFrames {
 struct FrameTracking {
     open_frames: BTreeMap<PartitionId, OpenSearchFrame>,
     last_sequence: u64,
+    /// Estimated bytes of frames queued or being projected.
+    queued_bytes: usize,
     /// Open and queued frames; frames waiting for a rebuild move to `rebuild_requests`.
     unprojected: BTreeMap<u64, PartitionId>,
     rebuild_requests: BTreeMap<PartitionId, RebuildRequest>,
@@ -59,12 +68,16 @@ struct OpenSearchFrame {
 }
 
 impl CommittedSearchFrames {
-    /// Returns the frames and the receiving end of their bounded queue.
-    pub(crate) fn new(queue_frames: usize) -> (Self, mpsc::Receiver<CommittedSearchFrame>) {
+    /// Returns the frames and the receiving end of their queue, bounded by frames and by bytes.
+    pub(crate) fn new(
+        queue_frames: usize,
+        max_queued_bytes: usize,
+    ) -> (Self, mpsc::Receiver<CommittedSearchFrame>) {
         let (queue, receiver) = mpsc::channel(queue_frames);
         let frames = Self {
             tracking: Mutex::new(FrameTracking::default()),
             queue,
+            max_queued_bytes,
             rebuild_requested: Notify::new(),
             projected_through: watch::Sender::new(None),
         };
@@ -103,14 +116,20 @@ impl CommittedSearchFrames {
             self.request_rebuild(&mut tracking, partition, frame.sequence);
             return;
         }
+        let size_bytes = frame.changes.iter().map(change_size_bytes).sum::<usize>();
+        if tracking.queued_bytes.saturating_add(size_bytes) > self.max_queued_bytes {
+            self.request_rebuild(&mut tracking, partition, frame.sequence);
+            return;
+        }
         let queued = self.queue.try_send(CommittedSearchFrame {
             sequence: frame.sequence,
             partition,
             position: position.clone(),
             changes: frame.changes,
+            size_bytes,
         });
         match queued {
-            Ok(()) => {}
+            Ok(()) => tracking.queued_bytes += size_bytes,
             Err(TrySendError::Full(frame)) => {
                 self.request_rebuild(&mut tracking, partition, frame.sequence);
             }
@@ -146,8 +165,11 @@ impl CommittedSearchFrames {
             .contains_key(&partition)
     }
 
-    pub(crate) fn finish_projected_frame(&self, sequence: u64) {
-        self.lock_tracking().unprojected.remove(&sequence);
+    /// Marks a dequeued frame searchable and releases its bytes from the queue's limit.
+    pub(crate) fn finish_projected_frame(&self, frame: &CommittedSearchFrame) {
+        let mut tracking = self.lock_tracking();
+        tracking.unprojected.remove(&frame.sequence);
+        tracking.queued_bytes = tracking.queued_bytes.saturating_sub(frame.size_bytes);
     }
 
     /// Marks the partition's frames through `sequence` searchable after a rebuild.
@@ -231,6 +253,16 @@ impl CommittedSearchFrames {
     }
 }
 
+fn change_size_bytes(change: &SearchDocumentChange) -> usize {
+    let document_bytes = match change {
+        SearchDocumentChange::Upsert {
+            encoded_document, ..
+        } => encoded_document.len(),
+        _ => 0,
+    };
+    CHANGE_OVERHEAD_BYTES + document_bytes
+}
+
 impl FrameTracking {
     fn open_frame(&mut self, partition: PartitionId) -> &mut OpenSearchFrame {
         if !self.open_frames.contains_key(&partition) {
@@ -258,5 +290,95 @@ impl ProjectionVisibilityWait for CommittedSearchFrames {
             .await
             .map(|_| ())
             .map_err(|_| SearchError::Unavailable("the search projection stopped".to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dexzd_apply::{ApplyContext, ApplyOutcome, StateWrite};
+    use dexzd_engine::CommittedCommand;
+    use dexzd_keyspace::row_keys::run_singleton_key;
+    use dexzd_keyspace::{ColumnFamily, FlowHash, RunId, RunTable};
+    use dexzd_protocol::dexzd::v1::{CommandReply, FlowCommand, SearchDocumentRecord};
+    use prost::Message;
+
+    use super::*;
+
+    const PARTITION: PartitionId = PartitionId(3);
+    const DOCUMENT_BYTES: usize = 1024;
+
+    fn committed_upsert(run_number: u8) -> CommittedFlowCommand {
+        let flow_hash = FlowHash(7);
+        let run_id = RunId([run_number; 16]);
+        let document = SearchDocumentRecord {
+            tenant_id: 1,
+            run_id: run_id.as_bytes().to_vec(),
+            flow_type: "x".repeat(DOCUMENT_BYTES),
+            ..SearchDocumentRecord::default()
+        };
+        CommittedFlowCommand {
+            command: FlowCommand::default(),
+            context: ApplyContext {
+                partition: PARTITION,
+                flow_hash,
+            },
+            committed: CommittedCommand {
+                outcome: ApplyOutcome {
+                    writes: vec![StateWrite::Put {
+                        column_family: ColumnFamily::Flow,
+                        key: run_singleton_key(flow_hash, run_id, RunTable::SearchDocument),
+                        value: document.encode_to_vec(),
+                    }],
+                    effects: Vec::new(),
+                    reply: CommandReply::default(),
+                    run_id: Some(run_id),
+                },
+                position: LogPosition::default(),
+            },
+        }
+    }
+
+    fn commit_frame(frames: &CommittedSearchFrames, run_number: u8) {
+        frames.record_command(&committed_upsert(run_number));
+        frames.finish_frame(
+            PARTITION,
+            &LogPosition {
+                seq: u64::from(run_number),
+                ..LogPosition::default()
+            },
+        );
+    }
+
+    /// A stalled projection, as during a ParadeDB outage, holds at most the byte limit in memory.
+    #[test]
+    fn queued_bytes_stay_bounded_while_the_projection_is_stalled() {
+        let frame_bytes = DOCUMENT_BYTES + CHANGE_OVERHEAD_BYTES + 32;
+        let (frames, mut queue) = CommittedSearchFrames::new(1_000, 3 * frame_bytes);
+        for run_number in 1..=20 {
+            commit_frame(&frames, run_number);
+        }
+        assert_eq!(
+            queue.len(),
+            3,
+            "frames beyond the byte limit are not queued"
+        );
+        assert!(frames.lock_tracking().queued_bytes <= 3 * frame_bytes);
+        assert_eq!(frames.rebuild_requests(), vec![PARTITION]);
+        frames.publish_projected_through();
+        assert_eq!(*frames.projected_through.borrow(), Some(0));
+
+        // The projection recovers: it drains the queue, then rebuilds the partition.
+        while let Ok(frame) = queue.try_recv() {
+            frames.finish_projected_frame(&frame);
+        }
+        frames.finish_rebuild(PARTITION, frames.last_sequence());
+        frames.publish_projected_through();
+        assert_eq!(*frames.projected_through.borrow(), Some(20));
+        assert_eq!(frames.lock_tracking().queued_bytes, 0);
+        assert!(frames.rebuild_requests().is_empty());
+
+        commit_frame(&frames, 21);
+        assert_eq!(queue.len(), 1, "freed bytes let new frames queue again");
+        assert!(frames.rebuild_requests().is_empty());
     }
 }

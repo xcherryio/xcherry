@@ -149,7 +149,7 @@ impl SearchProjectionWorker {
         if !self.is_projected(frame.partition, &frame.position) {
             self.apply_frame(&frame).await;
         }
-        self.frames.finish_projected_frame(frame.sequence);
+        self.frames.finish_projected_frame(&frame);
     }
 
     async fn apply_frame(&mut self, frame: &CommittedSearchFrame) {

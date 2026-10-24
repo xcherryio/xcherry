@@ -30,6 +30,8 @@ use projection_worker::SearchProjectionWorker;
 
 /// Frames waiting for the projection; when full, commits continue and the partition rebuilds later.
 const PROJECTION_QUEUE_FRAMES: usize = 4_096;
+/// Search document bytes waiting for the projection; beyond it, frames also become rebuilds.
+const PROJECTION_QUEUE_BYTES: usize = 64 * 1024 * 1024;
 /// Startup waits for another node's schema migration, which holds its lock for at most 5 s.
 const CONNECT_ATTEMPTS: u32 = 3;
 const CONNECT_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -51,7 +53,8 @@ impl ParadeDbSearch {
                 field: "search.paradeDbConnectionPoolSize",
             }
         })?;
-        let (frames, queue) = CommittedSearchFrames::new(PROJECTION_QUEUE_FRAMES);
+        let (frames, queue) =
+            CommittedSearchFrames::new(PROJECTION_QUEUE_FRAMES, PROJECTION_QUEUE_BYTES);
         let frames = Arc::new(frames);
         let visibility_wait: Arc<dyn ProjectionVisibilityWait> = frames.clone();
         let mut attempt = 1;
