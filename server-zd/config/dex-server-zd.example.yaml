@@ -1,3 +1,4 @@
+# Run a node with: dex-server-zd serve --config <this file>
 # Set cluster.nodeId, objectStore.bucket, and localStorage.directory for production; dev flags supply local values.
 cluster:
   nodeId: ""
@@ -76,6 +77,8 @@ limits:
   maxConcurrentStepsPerFlow: 1000
   maxSpeculativeCommandsPerFlow: 256
   maxSpeculativeBytesPerNode: 67108864
+  # Node-wide blocking read cap; shutdown waits for active reads within its budget.
+  maxBlockingStateReads: 64
   maxLongPollWaitersPerNode: 100000
   maxLongPollWaitersPerFlow: 1000
   maxRequestIdsPerRun: 1000

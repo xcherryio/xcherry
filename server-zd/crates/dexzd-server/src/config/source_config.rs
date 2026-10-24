@@ -9,7 +9,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{Config, CredentialSource, ObjectStoreCredentials, SearchBackend, StreamStoreBackend};
+use super::{
+    Config, CredentialSource, DevConfig, ObjectStoreCredentials, SearchBackend, StreamStoreBackend,
+};
 use crate::DevCommandOptions;
 
 const EMBEDDED_S3_ENDPOINT_PENDING: &str = "http://127.0.0.1:0";
@@ -72,6 +74,13 @@ impl Config {
             source,
         })?;
         let mut configuration = Self::parse_yaml(&contents)?;
+        if configuration.dev != DevConfig::default() {
+            return Err(ConfigError::Invalid {
+                field: "dev",
+                message: "applies only to dex-server-zd dev; remove it from a serve configuration"
+                    .to_owned(),
+            });
+        }
         configuration.resolve_environment_credentials()?;
         configuration.validate()?;
         Ok(configuration)

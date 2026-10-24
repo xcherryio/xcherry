@@ -53,12 +53,13 @@ pub use hard_delete_objects::{
     encode_hard_delete_value, hard_delete_placeholder_value,
 };
 pub use method_request::MethodRequest;
+pub(crate) use method_request::resolve_method_durability;
+pub(crate) use state_reads::{RunLocation, read_run_record, read_step_execution};
 
 use crate::recovery::{PartitionRuntimeRebuilder, RuntimeRebuildError};
 use crate::runtime::{CommitUrgency, FlowAddress, RuntimeEffectSink};
 use dispatch::{DispatchScheduler, InvocationStartResult};
 use method_request::MethodAttemptKey;
-use state_reads::RunLocation;
 use timer_service::TimerServices;
 
 /// Settings of the effect runner.
@@ -72,6 +73,11 @@ pub struct EffectsConfig {
     pub max_worker_request_bytes: usize,
     /// Default 16 MiB, `values.maxValueBytes`. Used only for runs whose settings carry no limit.
     pub default_max_value_bytes: u64,
+    /// Default false, `values.hydrateBeforeDispatch`. When true, method requests carry complete
+    /// values: the step input, Attributes, Step locals, condition results, loaded Channel messages,
+    /// and the last heartbeat value are read from the value table before dispatch instead of being
+    /// sent as value references. The request size limit applies to the complete request.
+    pub hydrate_before_dispatch: bool,
     /// Default 60 seconds. The timer service keeps timers firing within this horizon in memory
     /// and rereads the Timer index at least this often.
     pub timer_lookahead: Duration,
@@ -107,6 +113,7 @@ impl Default for EffectsConfig {
             heartbeat_batch_window: Duration::from_millis(20),
             max_worker_request_bytes: 32 * 1024 * 1024,
             default_max_value_bytes: 16 * 1024 * 1024,
+            hydrate_before_dispatch: false,
             timer_lookahead: Duration::from_secs(60),
             timer_load_limit: 1024,
             fired_timer_retry_delay: Duration::from_secs(1),

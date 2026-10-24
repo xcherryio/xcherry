@@ -10,8 +10,8 @@
 
 use dexzd_apply::{ApplyContext, FlowStateReader};
 use dexzd_keyspace::{
-    ColumnFamily, FlowHash, RunId, RunTable, ValueId, ValueReference, flow_directory_key, run_key,
-    run_table_prefix,
+    ColumnFamily, FlowHash, RunId, RunTable, VALUE_REFERENCE_PREFIX, ValueId, ValueReference,
+    flow_directory_key, run_key, run_table_prefix,
 };
 use dexzd_protocol::dex::{FlowStatus, Value, value};
 use dexzd_protocol::dexzd::v1::{
@@ -178,6 +178,61 @@ pub(crate) fn wire_value(stored: &StoredValue, run_id: RunId) -> Option<WireValu
             Some(WireValue::HardDeleteObject(object.clone()))
         }
     }
+}
+
+/// Converts a stored value to its wire form, loading value-table rows when `is_hydrating`.
+///
+/// Returns `None` for an empty stored value, and `Internal` when a held value-table row is
+/// missing.
+pub(crate) fn response_value(
+    state: &dyn FlowStateReader,
+    flow_hash: FlowHash,
+    run_id: RunId,
+    stored: &StoredValue,
+    is_hydrating: bool,
+) -> Result<Option<WireValue>, RuntimeError> {
+    if !is_hydrating || !matches!(stored.kind, Some(stored_value::Kind::TableValue(_))) {
+        return Ok(wire_value(stored, run_id));
+    }
+    let value = load_complete_value(state, flow_hash, run_id, stored)?.ok_or_else(|| {
+        RuntimeError::Internal {
+            detail: format!("a held value of run {run_id} has no value row"),
+        }
+    })?;
+    Ok(Some(WireValue::Value(value)))
+}
+
+/// Replaces a value reference of `run_id` with the referenced value; other values, including
+/// hard-delete references, are left unchanged.
+///
+/// Returns false when `value` is a value reference that does not name a live value of the run.
+pub(crate) fn hydrate_value_reference(
+    state: &dyn FlowStateReader,
+    flow_hash: FlowHash,
+    run_id: RunId,
+    value: &mut Value,
+) -> Result<bool, RuntimeError> {
+    let Some(
+        value::Kind::InternalBlobIdForStringValue(text)
+        | value::Kind::InternalBlobIdForObjValue(text),
+    ) = value.kind.as_ref()
+    else {
+        return Ok(true);
+    };
+    if !text.starts_with(VALUE_REFERENCE_PREFIX) {
+        return Ok(true);
+    }
+    let Ok(reference) = text.parse::<ValueReference>() else {
+        return Ok(false);
+    };
+    if reference.run_id != run_id {
+        return Ok(false);
+    }
+    let Some(loaded) = read_table_value(state, flow_hash, run_id, reference.value_id)? else {
+        return Ok(false);
+    };
+    *value = loaded;
+    Ok(true)
 }
 
 /// Returns the complete value of an inline or value-table stored value; `None` for a missing

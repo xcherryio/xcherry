@@ -307,6 +307,35 @@ fn maps_typed_attributes_and_binds_upsert_values() {
 }
 
 #[test]
+fn upsert_binds_outage_sized_keyword_and_wire_buckets() {
+    let mut document = document();
+    let mut fields = Vec::new();
+    let mut attributes = Vec::new();
+    for write_number in 0..600 {
+        let name = format!("outage-{write_number:04}");
+        let value = format!("{write_number:04}-{}", "x".repeat(1024));
+        document = document.with(&name, SearchValue::String(value.clone()));
+        fields.push((name.clone(), IndexType::Keyword));
+        attributes.push(SearchAttributeValue {
+            index_key: name,
+            index_type: IndexType::Keyword.into(),
+            value: Some(dex::Value {
+                kind: Some(dex::value::Kind::StringValue(value)),
+            }),
+        });
+    }
+    let row = SearchRow::from_document(TenantId(1), 600, &document, &fields)
+        .expect("indexed values match their types")
+        .with_wire_attributes(&attributes)
+        .expect("wire values are present");
+    let statement = upsert_statement(&row);
+    assert_eq!(statement.parameters.len(), 13 + 600 * 4);
+    assert_eq!(statement.sql.matches("jsonb_build_object(").count(), 24);
+    assert!(statement.sql.contains("$2413::text"));
+    assert!(statement.sql.contains(" || "));
+}
+
+#[test]
 fn preserves_original_datetime_and_null_wire_values() {
     let original_datetime = dex::Value {
         kind: Some(dex::value::Kind::StringValue(

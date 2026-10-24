@@ -943,19 +943,25 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 name = "dexzd-api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "dexzd-clock",
+ "dexzd-cluster-metadata",
  "dexzd-engine",
+ "dexzd-keyspace",
+ "dexzd-object-store",
  "dexzd-protocol",
  "dexzd-search",
  "dexzd-stream-store",
- "dexzd-worker-dispatch",
+ "dexzd-visibility-query",
  "futures",
+ "prost",
+ "prost-types",
  "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",
  "tonic-health",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1000,12 +1006,14 @@ version = "0.1.0"
 dependencies = [
  "dexzd-protocol",
  "dexzd-server",
- "s3mock-server",
+ "futures",
+ "prost",
+ "prost-types",
  "tempfile",
- "thiserror",
  "tokio",
+ "tokio-stream",
  "tonic",
- "tracing",
+ "tonic-health",
 ]
 
 [[package]]
@@ -1126,21 +1134,38 @@ dependencies = [
 name = "dexzd-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
  "clap",
  "dexzd-api",
+ "dexzd-apply",
  "dexzd-clock",
+ "dexzd-cluster-metadata",
  "dexzd-engine",
  "dexzd-keyspace",
  "dexzd-object-store",
+ "dexzd-protocol",
+ "dexzd-request-validation",
+ "dexzd-search",
  "dexzd-storage",
+ "dexzd-stream-store",
+ "dexzd-worker-dispatch",
+ "futures",
  "humantime-serde",
+ "prost",
+ "s3mock",
  "s3mock-server",
  "serde",
  "serde_yaml_ng",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tokio-util",
  "tonic",
+ "tonic-health",
+ "tower-layer",
  "tracing",
  "tracing-subscriber",
 ]

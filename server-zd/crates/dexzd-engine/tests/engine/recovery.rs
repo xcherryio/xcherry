@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use dexzd_engine::{
@@ -19,8 +20,8 @@ use dexzd_object_store::{ObjectStore, WriteCondition};
 use dexzd_storage::RocksDbStoreOptions;
 
 use crate::harness::{
-    CountingApplier, FAILING_FLOW, PARTITION_COUNT, RecordingRuntime, SinkEvent, TestCluster,
-    assert_frames_finish_after_their_commands,
+    BLOCKING_FLOW, CountingApplier, FAILING_FLOW, PARTITION_COUNT, RecordingRuntime, SinkEvent,
+    TestCluster, assert_frames_finish_after_their_commands,
 };
 
 /// Writes a barrier this binary does not support, as a newer binary's upgrade would.
@@ -192,6 +193,42 @@ async fn a_failed_runtime_rebuild_fails_startup() {
         )
         .await;
     assert!(matches!(result, Err(EngineStartError::RuntimeRebuild(_))));
+    // The failed start released its lease, so a fail-fast successor takes it at once.
+    let mut successor_config = config.clone();
+    successor_config.lease.fail_fast = true;
+    let successor = cluster
+        .start_with(&successor_config)
+        .await
+        .expect("the successor takes the released lease");
+    successor.node.shutdown().await;
+}
+
+/// Runs in real time: paused time does not advance while the blocked apply runs.
+#[tokio::test]
+async fn shutdown_releases_the_lease_when_an_applier_lane_is_stuck() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    let first = cluster.start_with(&config).await.expect("node starts");
+    let (_, _ticket) = first
+        .submit(BLOCKING_FLOW, CommitUrgency::Prompt)
+        .expect("submit succeeds");
+    first.applier.gate.wait_until_entered().await;
+    let shutdown = tokio::time::timeout(Duration::from_secs(10), first.node.shutdown()).await;
+    config.lease.fail_fast = true;
+    let successor_applier = Arc::new(CountingApplier::default());
+    successor_applier.gate.open();
+    let successor = cluster
+        .start(
+            &config,
+            successor_applier,
+            Arc::new(RecordingRuntime::default()),
+        )
+        .await;
+    // Open before asserting, so a failure does not leave the stuck lane blocked.
+    first.applier.gate.open();
+    assert!(shutdown.is_ok(), "shutdown abandons the stuck applier lane");
+    let successor = successor.expect("the successor takes the released lease");
+    successor.node.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]

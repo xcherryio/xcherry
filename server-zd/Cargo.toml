@@ -77,6 +77,7 @@ tonic = "0.14"
 tonic-health = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
+tower-layer = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1", features = ["v4", "v7"] }

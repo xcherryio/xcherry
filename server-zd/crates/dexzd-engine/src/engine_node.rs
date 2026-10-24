@@ -11,6 +11,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{
@@ -39,6 +40,9 @@ use crate::snapshots::{
     LogCleanup, OwnershipFence, SnapshotCatalog, SnapshotConfig, SnapshotError, SnapshotRetention,
     SnapshotService,
 };
+
+/// Longest wait for engine tasks and applier lanes to stop before the lease is released anyway.
+const TASK_STOP_BUDGET: Duration = Duration::from_secs(3);
 
 /// Configuration sections of an engine node.
 #[derive(Debug, Clone)]
@@ -133,137 +137,150 @@ impl EngineNode {
             state.clone(),
             tasks.cancellation.clone(),
         ));
-        let node_meta_lock = Arc::new(std::sync::Mutex::new(()));
-        let (proposal_sender, proposal_receiver) = mpsc::unbounded_channel();
-        let committer = CommandCommitter::new(CommandCommitterParts {
-            state: state.clone(),
-            store: store.clone(),
-            clock: clock.clone(),
-            epoch,
-            behavior_version: metadata.behavior_version,
-            max_unapplied_bytes: config.commit.max_unapplied_bytes,
-            is_checking_replay: config.commit.debug_replay_checks,
-            proposals: proposal_sender,
-        });
-        let runtime = runtime_factory(EngineServices {
-            committer: committer.clone(),
-            partition_hasher: metadata.cluster.partition_hasher.clone(),
-            node_meta_lock: node_meta_lock.clone(),
-            local_store: store.clone(),
-        });
-        let appliers = Arc::new(PartitionApplierPool::start(
-            FrameApplier {
+        // Every failure from here on must release the lease, or a successor waits for it to expire.
+        let mut applier_pool: Option<Arc<PartitionApplierPool>> = None;
+        let serving = async {
+            let node_meta_lock = Arc::new(std::sync::Mutex::new(()));
+            let (proposal_sender, proposal_receiver) = mpsc::unbounded_channel();
+            let committer = CommandCommitter::new(CommandCommitterParts {
+                state: state.clone(),
                 store: store.clone(),
-                applier,
-                hasher: metadata.cluster.partition_hasher.clone(),
-                state: state.clone(),
-                committed_commands: runtime.committed_commands.clone(),
+                clock: clock.clone(),
+                epoch,
+                behavior_version: metadata.behavior_version,
+                max_unapplied_bytes: config.commit.max_unapplied_bytes,
                 is_checking_replay: config.commit.debug_replay_checks,
-            },
-            config.commit.applier_lanes,
-            config.commit.applier_queue_frames,
-        ));
-        let replayed = LogReplay {
-            object_store: object_store.as_ref(),
-            clock: clock.as_ref(),
-            cluster_id,
-            streams: &metadata.streams,
-            store: &store,
-            appliers: &appliers,
-            state: &state,
-            epoch,
-        }
-        .run()
-        .await?;
-        committer.seed_stamp_watermarks(&applied_command_timestamps(&store)?);
-        let (pipeline, committed_batches) = CommitPipeline::start(
-            object_store.clone(),
-            clock.clone(),
-            stream.clone(),
-            epoch,
-            replayed.next_seq,
-            config.commit.pipeline_config(),
-        )?;
-        let progress = Arc::new(CommitProgress {
-            committed_log_bytes: AtomicU64::new(0),
-            last_routed_seq: AtomicU64::new(replayed.epoch_start_seq),
-        });
-        tasks.spawn(run_log_proposer(
-            pipeline,
-            proposal_receiver,
-            state.clone(),
-            tasks.cancellation.clone(),
-        ));
-        tasks.spawn(
-            CommittedBatchRouter {
-                appliers: appliers.clone(),
-                state: state.clone(),
-                node_id: stream.node_id.clone(),
-                incarnation: stream.incarnation,
-                progress: progress.clone(),
-            }
-            .run(committed_batches, tasks.cancellation.clone()),
-        );
-        // Rebuilt work may submit at once, so commands are accepted before rebuilding.
-        if !state.start_serving() {
-            return Err(EngineStartError::Stopped {
-                reason: state.stop_reason().unwrap_or(NodeStopReason::Shutdown),
+                proposals: proposal_sender,
             });
-        }
-        for partition in 0..partition_count {
-            let partition = PartitionId(
-                u16::try_from(partition).expect("the manifest limits partitions to u16"),
-            );
-            if !state.is_partition_halted(partition) {
-                runtime.rebuilder.rebuild_partition(partition).await?;
+            let runtime = runtime_factory(EngineServices {
+                committer: committer.clone(),
+                partition_hasher: metadata.cluster.partition_hasher.clone(),
+                node_meta_lock: node_meta_lock.clone(),
+                local_store: store.clone(),
+            });
+            let appliers = Arc::new(PartitionApplierPool::start(
+                FrameApplier {
+                    store: store.clone(),
+                    applier,
+                    hasher: metadata.cluster.partition_hasher.clone(),
+                    state: state.clone(),
+                    committed_commands: runtime.committed_commands.clone(),
+                    is_checking_replay: config.commit.debug_replay_checks,
+                },
+                config.commit.applier_lanes,
+                config.commit.applier_queue_frames,
+            ));
+            applier_pool = Some(appliers.clone());
+            let replayed = LogReplay {
+                object_store: object_store.as_ref(),
+                clock: clock.as_ref(),
+                cluster_id,
+                streams: &metadata.streams,
+                store: &store,
+                appliers: &appliers,
+                state: &state,
+                epoch,
             }
-        }
-        if let Some(reason) = state.stop_reason() {
-            return Err(EngineStartError::Stopped { reason });
-        }
-        let snapshots = Arc::new(SnapshotService {
-            store,
-            object_store: object_store.clone(),
-            clock: clock.clone(),
-            appliers: appliers.clone(),
-            progress,
-            retention: SnapshotRetention {
-                object_store: object_store.clone(),
-                node_id: stream.node_id.clone(),
-                retained_count: config.snapshots.retained_count,
-                deletion_delay: config.snapshots.deletion_delay,
-            },
-            fence: OwnershipFence {
+            .run()
+            .await?;
+            committer.seed_stamp_watermarks(&applied_command_timestamps(&store)?);
+            let (pipeline, committed_batches) = CommitPipeline::start(
+                object_store.clone(),
+                clock.clone(),
+                stream.clone(),
+                epoch,
+                replayed.next_seq,
+                config.commit.pipeline_config(),
+            )?;
+            let progress = Arc::new(CommitProgress {
+                committed_log_bytes: AtomicU64::new(0),
+                last_routed_seq: AtomicU64::new(replayed.epoch_start_seq),
+            });
+            tasks.spawn(run_log_proposer(
+                pipeline,
+                proposal_receiver,
+                state.clone(),
+                tasks.cancellation.clone(),
+            ));
+            tasks.spawn(
+                CommittedBatchRouter {
+                    appliers: appliers.clone(),
+                    state: state.clone(),
+                    node_id: stream.node_id.clone(),
+                    incarnation: stream.incarnation,
+                    progress: progress.clone(),
+                }
+                .run(committed_batches, tasks.cancellation.clone()),
+            );
+            // Rebuilt work may submit at once, so commands are accepted before rebuilding.
+            if !state.start_serving() {
+                return Err(EngineStartError::Stopped {
+                    reason: state.stop_reason().unwrap_or(NodeStopReason::Shutdown),
+                });
+            }
+            for partition in 0..partition_count {
+                let partition = PartitionId(
+                    u16::try_from(partition).expect("the manifest limits partitions to u16"),
+                );
+                if !state.is_partition_halted(partition) {
+                    runtime.rebuilder.rebuild_partition(partition).await?;
+                }
+            }
+            if let Some(reason) = state.stop_reason() {
+                return Err(EngineStartError::Stopped { reason });
+            }
+            let snapshots = Arc::new(SnapshotService {
+                store,
                 object_store: object_store.clone(),
                 clock: clock.clone(),
-                state: state.clone(),
-                node_id: stream.node_id.clone(),
+                appliers: appliers.clone(),
+                progress,
+                retention: SnapshotRetention {
+                    object_store: object_store.clone(),
+                    node_id: stream.node_id.clone(),
+                    retained_count: config.snapshots.retained_count,
+                    deletion_delay: config.snapshots.deletion_delay,
+                },
+                fence: OwnershipFence {
+                    object_store: object_store.clone(),
+                    clock: clock.clone(),
+                    state: state.clone(),
+                    node_id: stream.node_id.clone(),
+                    epoch,
+                },
+                log_cleanup: LogCleanup {
+                    object_store,
+                    clock,
+                    stream,
+                    partition_count,
+                    deletion_delay: config.snapshots.deletion_delay,
+                },
+                cluster_id,
                 epoch,
-            },
-            log_cleanup: LogCleanup {
-                object_store,
-                clock,
-                stream,
-                partition_count,
-                deletion_delay: config.snapshots.deletion_delay,
-            },
-            cluster_id,
-            epoch,
-            node_meta_lock,
-            config: config.snapshots.clone(),
-            catalog: tokio::sync::Mutex::new(SnapshotCatalog::default()),
-            last_snapshot_routed_seq: AtomicU64::new(0),
-        });
-        tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
-        tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");
-        Ok(Self {
-            committer,
-            state,
-            appliers,
-            snapshots,
-            lease,
-            tasks,
-        })
+                node_meta_lock,
+                config: config.snapshots.clone(),
+                catalog: tokio::sync::Mutex::new(SnapshotCatalog::default()),
+                last_snapshot_routed_seq: AtomicU64::new(0),
+            });
+            tasks.spawn(snapshots.clone().run(tasks.cancellation.clone()));
+            tracing::info!(epoch, next_seq = replayed.next_seq, "engine node serving");
+            Ok((committer, snapshots))
+        }
+        .await;
+        match serving {
+            Ok((committer, snapshots)) => Ok(Self {
+                committer,
+                state,
+                appliers: applier_pool.expect("the applier pool starts before the node serves"),
+                snapshots,
+                lease,
+                tasks,
+            }),
+            Err(error) => {
+                stop_and_release_lease(&state, tasks, applier_pool.as_deref(), lease).await;
+                Err(error)
+            }
+        }
     }
 
     /// Returns the committer that Flow runtimes submit commands through.
@@ -293,13 +310,48 @@ impl EngineNode {
     }
 
     /// Stops serving, fails waiting tickets, stops every task, and releases the lease.
+    ///
+    /// Tasks and applier lanes that do not stop within 3 seconds are abandoned, so the lease is
+    /// always released.
     pub async fn shutdown(self) {
-        self.state.stop(NodeStopReason::Shutdown);
-        self.tasks.shutdown().await;
-        self.appliers.shutdown().await;
-        self.lease.shutdown().await;
+        let Self {
+            state,
+            appliers,
+            lease,
+            tasks,
+            ..
+        } = self;
+        stop_and_release_lease(&state, tasks, Some(&appliers), lease).await;
         tracing::info!("engine node stopped");
     }
+}
+
+/// Stops serving, gives tasks and applier lanes [`TASK_STOP_BUDGET`] to stop, then releases the
+/// lease.
+async fn stop_and_release_lease(
+    state: &CommitState,
+    tasks: RunningTasks,
+    appliers: Option<&PartitionApplierPool>,
+    lease: LeaseHandle,
+) {
+    state.stop(NodeStopReason::Shutdown);
+    let stopping = async {
+        tasks.shutdown().await;
+        if let Some(appliers) = appliers {
+            appliers.shutdown().await;
+        }
+    };
+    if tokio::time::timeout(TASK_STOP_BUDGET, stopping)
+        .await
+        .is_err()
+    {
+        // Dropping the tasks aborts them; a lane blocked in apply ends with the process.
+        tracing::error!(
+            budget_seconds = TASK_STOP_BUDGET.as_secs(),
+            "engine tasks did not stop in time; releasing the lease anyway"
+        );
+    }
+    lease.shutdown().await;
 }
 
 fn validate_config(config: &EngineNodeConfig) -> Result<(), EngineStartError> {

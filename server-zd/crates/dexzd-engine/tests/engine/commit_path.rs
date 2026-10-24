@@ -50,7 +50,7 @@ async fn committed_commands_are_stamped_applied_and_published_in_order() {
             .all(|pair| pair[0].proposed_at_micros < pair[1].proposed_at_micros)
     );
     assert_eq!(test.committed_count("order-flow").await, 3);
-    // Shutdown joins the applier lanes, which hand each command to the runtime after its ticket.
+    // Shutdown joins the applier lanes, which hand each command to the runtime before its ticket.
     test.node.shutdown().await;
     let published = test.runtime.committed_command_ids("order-flow");
     let submitted: Vec<Vec<u8>> = stamped
@@ -58,6 +58,43 @@ async fn committed_commands_are_stamped_applied_and_published_in_order() {
         .map(|command| command.command_id)
         .collect();
     assert_eq!(published, submitted);
+}
+
+/// A read right after a commit, such as SearchFlows after StartFlow, needs the sink to have the frame.
+#[tokio::test(start_paused = true)]
+async fn tickets_resolve_only_after_the_sink_received_the_whole_frame() {
+    let mut cluster = TestCluster::new();
+    let config = cluster.config(LocalStoreConfig::InMemory);
+    let runtime = Arc::new(RecordingRuntime::with_gated_frame_ends());
+    let test = cluster
+        .start(
+            &config,
+            Arc::new(CountingApplier::default()),
+            runtime.clone(),
+        )
+        .await
+        .expect("node starts");
+    let (command, ticket) = test
+        .submit("visible-flow", CommitUrgency::Prompt)
+        .expect("submit succeeds");
+    let mut commit = Box::pin(ticket.wait());
+    runtime.frame_end_gate.wait_until_entered().await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    let is_waiting_for_the_sink = futures::poll!(&mut commit).is_pending();
+    // Open before asserting, so a failure does not leave the applier thread blocked.
+    runtime.frame_end_gate.open();
+    assert!(
+        is_waiting_for_the_sink,
+        "the ticket waits while the sink holds the frame end"
+    );
+    assert_eq!(
+        runtime.committed_command_ids("visible-flow"),
+        vec![command.command_id]
+    );
+    commit.await.expect("command commits");
+    test.node.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]

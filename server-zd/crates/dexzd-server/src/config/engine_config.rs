@@ -141,6 +141,9 @@ pub struct ValuesConfig {
     /// Defaults to 16 MiB; maximum serialized size of one application value before an API or Worker rejection.
     pub max_value_bytes: u64,
     /// Defaults to false; when true, load referenced values before Worker dispatch instead of sending references.
+    /// Client reads (GetAttributes, GetChannelMessages, GetFlowState, WaitForFlow results) and InvokeRPC,
+    /// including its Worker request, then also return complete values. GetHistoryEvents keeps references,
+    /// which LoadBlobs resolves.
     pub hydrate_before_dispatch: bool,
     /// Defaults to 64 KiB; values at or above this size use RocksDB BlobDB locally after committed apply.
     pub blob_db_min_value_bytes: u64,
@@ -188,6 +191,9 @@ pub struct LimitsConfig {
     pub max_speculative_commands_per_flow: u32,
     /// Defaults to 64 MiB; maximum speculative state and command bytes held by one node.
     pub max_speculative_bytes_per_node: u64,
+    /// Defaults to 64; caps node-wide blocking state reads (1..=u32::MAX).
+    /// Effect shutdown awaits in-progress reads; budget bounds a hung read.
+    pub max_blocking_state_reads: u32,
     /// Defaults to 100000; maximum concurrent long-poll waiters served by one node.
     pub max_long_poll_waiters_per_node: u32,
     /// Defaults to 1000; maximum concurrent long-poll waiters attached to one Flow.
@@ -206,6 +212,7 @@ impl Default for LimitsConfig {
             max_concurrent_steps_per_flow: 1_000,
             max_speculative_commands_per_flow: 256,
             max_speculative_bytes_per_node: 64 * 1024 * 1024,
+            max_blocking_state_reads: 64,
             max_long_poll_waiters_per_node: 100_000,
             max_long_poll_waiters_per_flow: 1_000,
             max_request_ids_per_run: 1_000,

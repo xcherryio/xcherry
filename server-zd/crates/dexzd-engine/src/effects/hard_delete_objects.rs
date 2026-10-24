@@ -29,7 +29,10 @@ use prost::Message;
 
 use crate::effects::EffectError;
 use crate::effects::state_reads::{RunLocation, decode_row, scan_all};
-use crate::runtime::{FlowAddress, HardDeleteReadError, HardDeleteValueReader};
+use crate::runtime::{
+    FlowAddress, HardDeleteReadError, HardDeleteUploadError, HardDeleteUploadOutcome,
+    HardDeleteUploads as RuntimeHardDeleteUploads, HardDeleteValueReader, HardDeleteValueUploader,
+};
 
 /// Key prefix of every hard-delete object, relative to the hard-delete object store.
 pub const HARD_DELETE_OBJECT_KEY_PREFIX: &str = "hard-delete/";
@@ -441,6 +444,52 @@ impl HardDeleteValueReader for HardDeleteObjects {
                 .await
                 .map_err(|error| HardDeleteReadError {
                     object_id: object.object_id.clone(),
+                    detail: error.to_string(),
+                })
+        })
+    }
+}
+
+impl HardDeleteValueUploader for HardDeleteObjects {
+    fn upload_hard_delete_values<'a>(
+        &'a self,
+        flow: &'a FlowAddress,
+        run_id: RunId,
+        writes: &'a mut [AttributeWrite],
+    ) -> BoxFuture<'a, Result<RuntimeHardDeleteUploads, HardDeleteUploadError>> {
+        Box::pin(async move {
+            let uploads = self
+                .upload_attribute_writes(self.owner_of(flow, run_id), writes)
+                .await
+                .map_err(|error| HardDeleteUploadError {
+                    detail: error.to_string(),
+                })?;
+            Ok(RuntimeHardDeleteUploads {
+                references: uploads.references,
+                object_keys: uploads.object_keys,
+            })
+        })
+    }
+
+    fn finish_hard_delete_uploads(
+        &self,
+        uploads: RuntimeHardDeleteUploads,
+        outcome: HardDeleteUploadOutcome,
+    ) -> BoxFuture<'_, Result<(), HardDeleteUploadError>> {
+        Box::pin(async move {
+            let is_committed = match outcome {
+                HardDeleteUploadOutcome::Committed => true,
+                HardDeleteUploadOutcome::NotCommitted => false,
+                // Recovery resolves these from committed state and the pending-upload records.
+                HardDeleteUploadOutcome::Unknown => return Ok(()),
+            };
+            let uploads = HardDeleteUploads {
+                references: uploads.references,
+                object_keys: uploads.object_keys,
+            };
+            self.finish_uploads(uploads, is_committed)
+                .await
+                .map_err(|error| HardDeleteUploadError {
                     detail: error.to_string(),
                 })
         })

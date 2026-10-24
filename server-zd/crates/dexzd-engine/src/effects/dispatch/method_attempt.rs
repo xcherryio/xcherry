@@ -206,8 +206,9 @@ impl MethodAttempt {
         let run = self.run;
         let key = self.key.clone();
         let task_id = self.task_id.clone();
+        let is_hydrating = self.context.config.hydrate_before_dispatch;
         self.read_off_task(true, move |reader| {
-            read_method_attempt_state(reader, run, &key, &task_id)
+            read_method_attempt_state(reader, run, &key, &task_id, is_hydrating)
         })
         .await
     }
