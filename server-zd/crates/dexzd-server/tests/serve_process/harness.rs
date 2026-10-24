@@ -312,12 +312,46 @@ impl ServeProcess {
         }
     }
 
-    /// Returns whether every readiness name reports SERVING within `budget`.
+    /// Returns whether every readiness name reports SERVING at some point within `budget`.
     pub(crate) async fn is_serving_within(&self, budget: Duration) -> bool {
-        matches!(
-            tokio::time::timeout(budget, self.serving_channel()).await,
-            Ok(Some(_))
-        )
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            if let Ok(Some(_)) = tokio::time::timeout(remaining, self.serving_channel()).await {
+                return true;
+            }
+            tokio::time::sleep(remaining.min(Duration::from_millis(50))).await;
+        }
+    }
+
+    /// Waits until the process log contains `line`, failing if the process exits first or
+    /// `budget` elapses.
+    pub(crate) async fn wait_for_log_line(&mut self, line: &str, budget: Duration) {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            if self.log().contains(line) {
+                return;
+            }
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .expect("the process status is readable")
+            {
+                panic!(
+                    "dex-server-zd exited with {status} before logging {line:?}:\n{}",
+                    self.log()
+                );
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "dex-server-zd did not log {line:?} within {budget:?}:\n{}",
+                self.log()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     async fn serving_channel(&self) -> Option<Channel> {

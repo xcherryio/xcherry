@@ -29,6 +29,9 @@ const CLEANUP_BUDGET: Duration = Duration::from_secs(60);
 /// Far below the 60 s lease, which a standby that missed the release would wait out.
 const TAKEOVER_BUDGET: Duration = Duration::from_secs(15);
 const HEALTH_CHECK_BUDGET: Duration = Duration::from_secs(2);
+const STANDBY_WAIT_BUDGET: Duration = Duration::from_secs(30);
+/// Logged once a lease read finds the lease held by another live process.
+const LEASE_WAIT_LOG_LINE: &str = "another process holds the node lease";
 
 /// A waiting standby takes over promptly after SIGTERM and serves every acknowledged Flow.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -75,19 +78,24 @@ async fn waiting_standby_takes_over_without_losing_writes() {
         standby_address,
         directory.path().join("standby.log"),
     );
-    for _ in 0..3 {
-        assert!(
-            !standby.is_serving_within(HEALTH_CHECK_BUDGET).await,
-            "the standby serves while another process holds the lease:\n{}",
-            standby.log()
-        );
-    }
+    standby
+        .wait_for_log_line(LEASE_WAIT_LOG_LINE, STANDBY_WAIT_BUDGET)
+        .await;
     // Any state the standby read so far is at most this seq; cleanup must pass it.
     let last_seq_before_cleanup = last_log_seq(&primary, &log_prefix);
+    assert!(
+        !standby.is_serving_within(HEALTH_CHECK_BUDGET).await,
+        "the standby serves while another process holds the lease:\n{}",
+        standby.log()
+    );
     writer
         .write_until(|| first_log_seq(&primary, &log_prefix) > last_seq_before_cleanup + 1)
         .await;
-    assert!(!standby.is_serving_within(HEALTH_CHECK_BUDGET).await);
+    assert!(
+        !standby.is_serving_within(HEALTH_CHECK_BUDGET).await,
+        "the standby serves while another process holds the lease:\n{}",
+        standby.log()
+    );
 
     let serving_status = serving.terminate(SHUTDOWN_BUDGET).await;
     assert_eq!(serving_status.code(), Some(0), "{}", serving.log());

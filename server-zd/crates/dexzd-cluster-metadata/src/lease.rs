@@ -209,6 +209,7 @@ pub async fn acquire_lease(
     let key = format!("lease/{}", node.node_id);
     let process_id = Uuid::new_v4().to_string();
     let held_lease_poll_interval = HELD_LEASE_POLL_LIMIT.min(config.duration / 3);
+    let mut has_reported_wait = false;
     loop {
         let existing = store.get(&key).await?;
         let previous = existing
@@ -236,6 +237,15 @@ pub async fn acquire_lease(
                         node_id: node.node_id.clone(),
                         expires_at_unix_micros: previous.expires_at_unix_micros,
                     });
+                }
+                if !has_reported_wait {
+                    tracing::info!(
+                        node_id = %node.node_id,
+                        holder_process_id = %previous.holder_process_id,
+                        expires_at_unix_micros = previous.expires_at_unix_micros,
+                        "another process holds the node lease; waiting for its release or expiry"
+                    );
+                    has_reported_wait = true;
                 }
                 let until_available = Duration::from_micros((available_at - now) as u64);
                 tokio::time::sleep(until_available.min(held_lease_poll_interval)).await;
