@@ -276,11 +276,11 @@ public final class Worker implements AutoCloseable {
             }
             final ServerInfo serverInfo;
             try {
-                serverInfo = flowService
+                serverInfo = GrpcCredential.callUnaryWithRetry(options.getCredential(), () -> flowService
                         .withDeadlineAfter(
                                 options.getAttributeIndexSyncTimeout().toMillis(),
                                 TimeUnit.MILLISECONDS)
-                        .getServerInfo(Empty.getDefaultInstance());
+                        .getServerInfo(Empty.getDefaultInstance()));
             } catch (RuntimeException failure) {
                 if (Status.fromThrowable(failure).getCode() == Status.Code.UNAUTHENTICATED) {
                     throw authenticationFailure(failure);
@@ -290,13 +290,13 @@ public final class Worker implements AutoCloseable {
             serverProtocol.recordNegotiatedVersion(
                     ServerProtocolCompatibility.negotiate(serverInfo, sdkVersion));
             try {
-                flowService
+                GrpcCredential.callUnaryWithRetry(options.getCredential(), () -> flowService
                         .withDeadlineAfter(
                                 options.getAttributeIndexSyncTimeout().toMillis(),
                                 TimeUnit.MILLISECONDS)
                         .syncAttributeIndexes(SyncAttributeIndexRequest.newBuilder()
                                 .putAllAttributeIndexes(registry.getAttributeIndexes())
-                                .build());
+                                .build()));
             } catch (RuntimeException failure) {
                 if (Status.fromThrowable(failure).getCode() == Status.Code.UNAUTHENTICATED) {
                     throw authenticationFailure(failure);
@@ -378,13 +378,17 @@ public final class Worker implements AutoCloseable {
     /**
      * Stops the worker and permanently closes its lifecycle.
      *
-     * <p>The borrowed {@link BlobCache} is not closed.
+     * <p>An {@link ApiKeyCredential} supplied in the options is closed. The borrowed
+     * {@link BlobCache} is not closed.
      */
     @Override
     public void close() {
         stop();
         synchronized (this) {
             state = State.CLOSED;
+        }
+        if (options.getCredential() instanceof ApiKeyCredential) {
+            ((ApiKeyCredential) options.getCredential()).close();
         }
     }
 

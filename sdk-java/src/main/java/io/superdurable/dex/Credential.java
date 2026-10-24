@@ -13,8 +13,9 @@ package io.superdurable.dex;
 /**
  * Supplies a bearer token before each Client or Worker service call.
  *
- * <p>Implementations must be safe for concurrent calls and must not block. A blocked lookup can
- * occupy a gRPC executor thread after a deadline or cancellation ends the call. A failure prevents
+ * <p>Implementations must be safe for concurrent calls. A blocked lookup can
+ * occupy a gRPC executor thread after a deadline or cancellation ends the call. {@link
+ * ApiKeyCredential} bounds its first and expired-token exchanges by a timeout. A failure prevents
  * the request from reaching Dex and becomes a Client {@link
  * io.superdurable.dex.exceptions.DexServiceException} with gRPC {@code UNAUTHENTICATED}, or an
  * {@link IllegalStateException} during Worker startup. Pull Worker streams obtain a token when each stream opens, so

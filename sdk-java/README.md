@@ -458,8 +458,36 @@ WorkerOptions workerOptions = WorkerOptions.newBuilder()
 `FileCredential` reads and trims the file at construction. It checks its
 modification time and size at most once per second and rereads changed content.
 An unreadable or empty file fails calls instead of sending a stale token.
-Custom `Credential` implementations must support concurrent calls and must not
-block. An exception fails the call before it reaches Dex. A configured gRPC
+Use `ApiKeyCredential` when the application holds a long-lived API key and the
+token endpoint issues short-lived access tokens for a supplied Dex server ID:
+
+```java
+ApiKeyCredential credential = ApiKeyCredential.builder(
+        URI.create("https://auth.example.com/token"), "dex-server-id", apiKey)
+        .exchangeTimeout(Duration.ofSeconds(10))
+        .build();
+try (Client client = new Client(registry, blobCache,
+        ClientOptions.newBuilder().serverAddress("dex.example.com:8801")
+                .credential(credential).build())) {
+    client.searchFlows("", 10);
+}
+```
+
+The endpoint must use HTTPS; HTTP is allowed only for localhost, 127.0.0.0/8,
+or ::1. The first call exchanges the key. One background refresh starts after
+80% of the token lifetime, and callers keep using the current token until it
+expires. Concurrent calls share an exchange. Failed refreshes are retried at
+most every five seconds while the token remains valid. An expired token waits
+for the exchange, bounded by the exchange timeout. When Dex rejects a token,
+the credential discards only that token; unary Client calls retry once, while
+pull streams reconnect with a new token. The Client or Worker closes the
+credential and stops any active refresh thread. Use separate credential instances
+for separate lifecycles. An injected `HttpClient` remains the caller's property.
+The API key and access tokens are omitted from credential descriptions and
+exchange errors.
+
+Custom `Credential` implementations must support concurrent calls and should
+avoid unbounded blocking. An exception fails the call before it reaches Dex. A configured gRPC
 deadline or cancellation ends a call even if token lookup blocks, but the lookup
 continues to occupy a channel executor thread until it returns. Client calls
 report credential failures as `DexServiceException` with `UNAUTHENTICATED`;
