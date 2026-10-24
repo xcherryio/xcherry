@@ -12,6 +12,7 @@ mod local_store;
 mod memory_store;
 mod rocksdb_store;
 mod snapshot;
+mod state_comparison;
 
 pub use local_store::{
     LocalReadView, LocalStore, ScanDirection, StorageError, StorageResult, WriteBatch,
@@ -22,6 +23,9 @@ pub use rocksdb_store::{RocksDbLocalStore, RocksDbStoreOptions};
 pub use snapshot::{
     DEFAULT_SNAPSHOT_RETENTION, RestoredLocalStore, SnapshotIdentity, SnapshotSource,
     create_snapshot, restore_snapshot, retain_snapshots,
+};
+pub use state_comparison::{
+    CanonicalizedStoreField, StateComparisonError, StateDifference, compare_store_views,
 };
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ pub mod values;
 
 pub use apply_context::{ApplyContext, BehaviorVersion};
 pub use apply_outcome::{ApplyEffect, ApplyError, ApplyOutcome, StateWrite, WaitableChange};
+pub use history::diagnostics;
 pub use state_access::{FlowStateReader, StateReadError, StateRow};
 
 use dexzd_protocol::dexzd::v1::FlowCommand;

@@ -209,6 +209,7 @@ impl FlowCommandCommitter for FakeCommitter {
     fn check_speculative_outcome(
         &self,
         _partition: PartitionId,
+        _command: &FlowCommand,
         _speculative: &ApplyOutcome,
         _committed: &CommittedCommand,
     ) -> Result<(), ReplayMismatch> {

@@ -166,6 +166,17 @@ fn replay_and_local_store_disk_settings_reach_the_engine_node() {
 }
 
 #[test]
+fn replay_check_yaml_override_reaches_the_engine_node() {
+    let mut configuration = valid_config();
+    assert_eq!(configuration.commit.debug_replay_checks, None);
+    let parsed = Config::parse_yaml("commit:\n  debugReplayChecks: false\n")
+        .expect("parse replay check override");
+    configuration.commit = parsed.commit;
+    let components = ComponentConfigs::from_config(&configuration).expect("component config");
+    assert!(!components.engine_node.commit.debug_replay_checks);
+}
+
+#[test]
 fn dev_flags_override_yaml_and_create_documented_local_layout() {
     let temporary = tempfile::tempdir().expect("test directory");
     let yaml_path = temporary.path().join("config.yaml");
