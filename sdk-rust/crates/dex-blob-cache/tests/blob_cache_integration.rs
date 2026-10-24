@@ -107,6 +107,38 @@ fn blob_cache_preserves_valid_files_and_removes_corruption_on_restart() {
 }
 
 #[test]
+fn blob_cache_rejects_damaged_files_and_accepts_refetch() {
+    for damage in ["truncated", "corrupted"] {
+        let directory = TestDirectory::new();
+        let cache = BlobCache::open(config(directory.path(), 1 << 20)).unwrap();
+        let blob_id = "refetched-id";
+        let payload = b"original-payload";
+        assert!(cache.put(blob_id, payload).unwrap());
+        let path = path_for(directory.path(), blob_id);
+
+        match damage {
+            "truncated" => {
+                let file = OpenOptions::new().write(true).open(&path).unwrap();
+                file.set_len((24 + blob_id.len() + 2) as u64).unwrap();
+            }
+            "corrupted" => {
+                let mut file = OpenOptions::new().write(true).open(&path).unwrap();
+                file.seek(SeekFrom::Start((24 + blob_id.len()) as u64))
+                    .unwrap();
+                file.write_all(&[0xff]).unwrap();
+            }
+            _ => unreachable!("the test enumerates only known damage modes"),
+        }
+
+        assert_eq!(cache.get(blob_id).unwrap(), None, "{damage}");
+        assert!(!path.exists(), "{damage}");
+        assert!(cache.put(blob_id, payload).unwrap(), "{damage}");
+        assert_eq!(cache.get(blob_id).unwrap().unwrap(), payload, "{damage}");
+        cache.close().unwrap();
+    }
+}
+
+#[test]
 fn blob_cache_commits_one_file_for_concurrent_same_id_puts() {
     let directory = TestDirectory::new();
     let cache = Arc::new(BlobCache::open(config(directory.path(), 1 << 20)).unwrap());
@@ -126,6 +158,42 @@ fn blob_cache_commits_one_file_for_concurrent_same_id_puts() {
     }
 
     assert_eq!(regular_files(&directory.path().join("blobs")).len(), 1);
+    cache.close().unwrap();
+}
+
+#[test]
+fn blob_cache_commits_distinct_files_for_concurrent_puts() {
+    let directory = TestDirectory::new();
+    let cache = Arc::new(BlobCache::open(config(directory.path(), 1 << 20)).unwrap());
+    let barrier = Arc::new(Barrier::new(17));
+    let mut threads = Vec::new();
+    for worker_index in 0..16 {
+        let cache = Arc::clone(&cache);
+        let barrier = Arc::clone(&barrier);
+        threads.push(thread::spawn(move || {
+            barrier.wait();
+            assert!(
+                cache
+                    .put(&format!("distinct-{worker_index}"), b"payload")
+                    .unwrap()
+            );
+        }));
+    }
+    barrier.wait();
+    for worker in threads {
+        worker.join().unwrap();
+    }
+
+    for worker_index in 0..16 {
+        assert_eq!(
+            cache
+                .get(&format!("distinct-{worker_index}"))
+                .unwrap()
+                .unwrap(),
+            b"payload"
+        );
+    }
+    assert_eq!(regular_files(&directory.path().join("blobs")).len(), 16);
     cache.close().unwrap();
 }
 
