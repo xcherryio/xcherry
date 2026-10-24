@@ -115,10 +115,8 @@ impl PartitionTimerService {
         let lookahead_micros =
             i64::try_from(self.context.config.timer_lookahead.as_micros()).unwrap_or(i64::MAX);
         let horizon_micros = now_micros.saturating_add(lookahead_micros);
-        let entries = self.load_timers(horizon_micros)?;
         let now = Instant::now();
-        let loaded_keys: BTreeSet<&Vec<u8>> = entries.iter().map(|(key, _)| key).collect();
-        self.retry_after.retain(|key, _| loaded_keys.contains(key));
+        let entries = self.load_timers(horizon_micros, now)?;
         let is_waiting = |retry_after: &BTreeMap<Vec<u8>, (Instant, Duration)>, key: &Vec<u8>| {
             retry_after
                 .get(key)
@@ -185,27 +183,50 @@ impl PartitionTimerService {
         Ok(Some(wake_at))
     }
 
-    /// Reads up to the load limit of timer index rows firing at or before `horizon_micros`.
+    /// Reads up to the load limit of timer index rows outside retry backoff, firing at or before
+    /// `horizon_micros`.
+    ///
+    /// Returns the scanned rows in index order, including rows in backoff.
     fn load_timers(
-        &self,
+        &mut self,
         horizon_micros: i64,
+        now: Instant,
     ) -> Result<Vec<(Vec<u8>, TimerIndexEntry)>, EffectError> {
+        let limit = self.context.config.timer_load_limit;
         let reader = self.context.runtime.committed_state_reader()?;
-        let start = partition_index_prefix(self.partition, IndexKind::Timer);
+        let mut start = partition_index_prefix(self.partition, IndexKind::Timer);
         let end = timer_index_start_key(self.partition, horizon_micros.saturating_add(1));
-        reader
-            .scan(
-                ColumnFamily::PartitionIndex,
-                &start,
-                &end,
-                self.context.config.timer_load_limit,
-            )?
-            .into_iter()
-            .map(|(key, _)| {
+        let mut entries = Vec::new();
+        let mut ready_count = 0;
+        loop {
+            let page = reader.scan(ColumnFamily::PartitionIndex, &start, &end, limit)?;
+            let is_last_page = page.len() < limit;
+            for (key, _) in page {
                 let entry = parse_timer_index_key(self.partition, &key)?;
-                Ok((key, entry))
-            })
-            .collect()
+                let is_waiting = self
+                    .retry_after
+                    .get(&key)
+                    .is_some_and(|(retry_at, _)| *retry_at > now);
+                if !is_waiting {
+                    ready_count += 1;
+                }
+                entries.push((key, entry));
+            }
+            if is_last_page || ready_count >= limit {
+                break;
+            }
+            let Some((last_key, _)) = entries.last() else {
+                break;
+            };
+            start = last_key.iter().copied().chain([0]).collect();
+        }
+        let scanned_keys: BTreeSet<&Vec<u8>> = entries.iter().map(|(key, _)| key).collect();
+        let last_scanned = entries.last().map(|(key, _)| key.clone());
+        // Rows beyond the scan keep their backoff; scanned rows no longer in the index lose it.
+        self.retry_after.retain(|key, _| {
+            scanned_keys.contains(key) || last_scanned.as_ref().is_some_and(|last| key > last)
+        });
+        Ok(entries)
     }
 
     async fn propose_timers_fired(

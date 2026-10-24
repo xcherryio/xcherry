@@ -9,7 +9,7 @@
 //! Tracks pending and running method attempts for the effect router: lock-checked starts,
 //! invocations parked on busy locks, running attempt tasks, and cancellation.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dexzd_keyspace::RunId;
@@ -21,9 +21,6 @@ use crate::effects::effect_runtime::{EffectRuntimeError, InvocationStartOutcome}
 use crate::effects::method_request::MethodAttemptKey;
 use crate::effects::{EffectContext, RouterMessage};
 use crate::runtime::FlowAddress;
-
-/// Task IDs of finished attempts remembered to ignore duplicate start effects.
-const FINISHED_TASK_ID_CAPACITY: usize = 4096;
 
 /// Result of one lock-checked start, reported back to the router.
 #[derive(Debug)]
@@ -49,9 +46,8 @@ pub(crate) struct DispatchScheduler {
     starting: BTreeMap<MethodAttemptKey, StartingInvocation>,
     parked: BTreeMap<RunId, BTreeMap<MethodAttemptKey, FlowAddress>>,
     lock_release_counts: BTreeMap<RunId, u64>,
-    running: BTreeMap<Vec<u8>, RunningAttempt>,
-    finished_task_ids: BTreeSet<Vec<u8>>,
-    finished_order: VecDeque<Vec<u8>>,
+    /// Running attempts by task ID, then by attempt key; time travel may reuse a task ID.
+    running: BTreeMap<Vec<u8>, BTreeMap<MethodAttemptKey, RunningAttempt>>,
 }
 
 impl DispatchScheduler {
@@ -62,8 +58,6 @@ impl DispatchScheduler {
             parked: BTreeMap::new(),
             lock_release_counts: BTreeMap::new(),
             running: BTreeMap::new(),
-            finished_task_ids: BTreeSet::new(),
-            finished_order: VecDeque::new(),
         }
     }
 
@@ -119,19 +113,23 @@ impl DispatchScheduler {
         }
     }
 
-    /// Runs a started attempt unless it already runs or ran.
+    /// Runs a started attempt unless the same attempt of the same run attempt already runs.
+    ///
+    /// A start of a finished attempt still spawns; the attempt ends at once unless state
+    /// shows it running.
     pub(crate) fn run_started_attempt(
         &mut self,
         flow: FlowAddress,
         key: MethodAttemptKey,
         task_id: Vec<u8>,
     ) {
-        if self.running.contains_key(&task_id) || self.finished_task_ids.contains(&task_id) {
+        let attempts = self.running.entry(task_id.clone()).or_default();
+        if attempts.contains_key(&key) {
             return;
         }
         let cancel = self.context.shutdown.child_token();
-        self.running.insert(
-            task_id.clone(),
+        attempts.insert(
+            key.clone(),
             RunningAttempt {
                 cancel: cancel.clone(),
             },
@@ -141,32 +139,34 @@ impl DispatchScheduler {
             context: Arc::clone(&self.context),
             flow,
             run,
-            key,
+            key: key.clone(),
             task_id: task_id.clone(),
             cancel,
         };
         let context = Arc::clone(&self.context);
         self.context.tracker.spawn(async move {
             attempt.run().await;
-            context.report(RouterMessage::AttemptFinished { task_id });
+            context.report(RouterMessage::AttemptFinished { task_id, key });
         });
     }
 
-    /// Stops the attempt dispatched as `task_id`; its Worker receives a cancel request.
+    /// Stops the attempts dispatched as `task_id`; their Workers receive a cancel request.
     pub(crate) fn cancel_attempt(&mut self, task_id: &[u8]) {
-        if let Some(attempt) = self.running.get(task_id) {
+        for attempt in self
+            .running
+            .get(task_id)
+            .into_iter()
+            .flat_map(BTreeMap::values)
+        {
             attempt.cancel.cancel();
         }
     }
 
-    pub(crate) fn finish_attempt(&mut self, task_id: Vec<u8>) {
-        self.running.remove(&task_id);
-        if self.finished_task_ids.insert(task_id.clone()) {
-            self.finished_order.push_back(task_id);
-        }
-        while self.finished_order.len() > FINISHED_TASK_ID_CAPACITY {
-            if let Some(oldest) = self.finished_order.pop_front() {
-                self.finished_task_ids.remove(&oldest);
+    pub(crate) fn finish_attempt(&mut self, task_id: Vec<u8>, key: &MethodAttemptKey) {
+        if let Some(attempts) = self.running.get_mut(&task_id) {
+            attempts.remove(key);
+            if attempts.is_empty() {
+                self.running.remove(&task_id);
             }
         }
     }

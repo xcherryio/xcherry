@@ -27,7 +27,7 @@ use dexzd_apply::{
 use dexzd_clock::WallClock;
 use dexzd_keyspace::row_keys::run_singleton_key;
 use dexzd_keyspace::{ColumnFamily, PartitionHasher, PartitionId, RunId, RunTable, TenantId};
-use dexzd_object_store::InMemoryObjectStore;
+use dexzd_object_store::{FaultAction, FaultInjector, InMemoryObjectStore, ObjectStoreOperation};
 use dexzd_protocol::dex::{
     FlowTimeoutPolicy, InvokeExecuteMethodOutput, InvokeExecuteMethodResponse,
     InvokeWaitForMethodOutput, InvokeWaitForMethodResponse, PollWorkerTaskFrame, StartFlowRequest,
@@ -49,9 +49,9 @@ use tokio::sync::mpsc;
 use crate::effects::effect_runtime::{EffectRuntime, EffectRuntimeError, InvocationStartOutcome};
 use crate::effects::state_reads::{RunLocation, read_step_execution};
 use crate::effects::{
-    EffectDependencies, EffectRunner, EffectTasksHandle, EffectsConfig, HardDeleteObjects,
-    MethodDispatchRequest, MethodDispatchSession, MethodDispatchStartError, MethodDispatcher,
-    MethodRequest, NodeMetaUploadLedger,
+    EffectDependencies, EffectError, EffectRunner, EffectTasksHandle, EffectsConfig,
+    HardDeleteObjects, HardDeleteUploadLedger, MethodDispatchRequest, MethodDispatchSession,
+    MethodDispatchStartError, MethodDispatcher, MethodRequest, NodeMetaUploadLedger,
 };
 use crate::runtime::{CommitUrgency, FlowAddress, RuntimeEffectSink};
 
@@ -573,12 +573,20 @@ impl EffectHarness {
     }
 
     pub(super) fn with_config(durable: DurableState, config: EffectsConfig) -> Self {
-        let hasher = PartitionHasher::new(&[7; 16], 16).expect("valid partition hasher");
-        let clock = Arc::clone(&durable.clock);
         let ledger = Arc::new(NodeMetaUploadLedger::new(
             Arc::clone(&durable.local_store) as _,
             Arc::new(Mutex::new(())),
         ));
+        Self::with_ledger(durable, config, ledger)
+    }
+
+    pub(super) fn with_ledger(
+        durable: DurableState,
+        config: EffectsConfig,
+        ledger: Arc<dyn HardDeleteUploadLedger>,
+    ) -> Self {
+        let hasher = PartitionHasher::new(&[7; 16], 16).expect("valid partition hasher");
+        let clock = Arc::clone(&durable.clock);
         let hard_delete_objects = HardDeleteObjects::new(
             Arc::clone(&durable.objects) as _,
             ledger,
@@ -640,13 +648,18 @@ impl EffectHarness {
 
     /// Starts every partition's timer service and rebuilds its work.
     pub(super) async fn rebuild_all_partitions(&self) {
+        self.try_rebuild_all_partitions()
+            .await
+            .expect("rebuild succeeds");
+    }
+
+    /// Rebuilds every partition and returns the first failure.
+    pub(super) async fn try_rebuild_all_partitions(&self) -> Result<(), EffectError> {
         for partition in 0..self.hasher.partition_count() {
             let partition = PartitionId(u16::try_from(partition).expect("fits"));
-            self.runner
-                .rebuild_partition(partition)
-                .await
-                .expect("rebuild succeeds");
+            self.runner.rebuild_partition(partition).await?;
         }
+        Ok(())
     }
 
     /// Starts a Flow and returns its run ID.
@@ -771,4 +784,48 @@ pub(super) fn ok_override(
             .is_some_and(&predicate)
             .then(ok_reply)
     })
+}
+
+/// Applies `action` to `operation` calls on keys under `key_prefix` while enabled.
+pub(super) struct SwitchableFault {
+    pub(super) is_enabled: AtomicBool,
+    pub(super) operations: Vec<ObjectStoreOperation>,
+    pub(super) key_prefix: &'static str,
+    pub(super) action: FaultAction,
+}
+
+impl SwitchableFault {
+    /// Returns a durable state whose object store consults a disabled fault.
+    pub(super) fn install(
+        operations: Vec<ObjectStoreOperation>,
+        action: FaultAction,
+    ) -> (DurableState, Arc<Self>) {
+        let fault = Arc::new(Self {
+            is_enabled: AtomicBool::new(false),
+            operations,
+            key_prefix: "hard-delete/",
+            action,
+        });
+        let mut durable = DurableState::new();
+        durable.objects = Arc::new(InMemoryObjectStore::with_injector(
+            Arc::clone(&fault) as Arc<dyn FaultInjector>
+        ));
+        (durable, fault)
+    }
+
+    pub(super) fn set_enabled(&self, is_enabled: bool) {
+        self.is_enabled.store(is_enabled, Ordering::SeqCst);
+    }
+}
+
+impl FaultInjector for SwitchableFault {
+    fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        if self.is_enabled.load(Ordering::SeqCst)
+            && self.operations.contains(&operation)
+            && key.starts_with(self.key_prefix)
+        {
+            return self.action;
+        }
+        FaultAction::Proceed
+    }
 }

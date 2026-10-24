@@ -6,21 +6,30 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use bytes::Bytes;
-use dexzd_apply::ApplyEffect;
+use dexzd_apply::{ApplyEffect, FlowStateReader};
 use dexzd_keyspace::row_keys::{outbox_key, run_singleton_key};
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable};
 use dexzd_object_store::{ObjectStore, WriteCondition};
-use dexzd_protocol::dex::{FlowResult, FlowStatus};
+use dexzd_protocol::dex::{
+    FlowResult, FlowStatus, InvokeWaitForMethodResponse, StepOptions, SubFlowCondition,
+    WaitingCondition, WaitingConditionType,
+};
 use dexzd_protocol::dexzd::v1::{
-    ChildFlowCompletedMessage, CrossFlowEndpoint, OutboxRecord, RunRecord, flow_command,
+    ChildFlowCompletedMessage, CommandErrorReply, CommandReply, CrossFlowEndpoint,
+    InboxMessageCommand, OutboxRecord, RunRecord, RunSettings, command_reply, flow_command,
     inbox_message_command, outbox_record,
 };
 use prost::Message;
 
-use super::{EffectHarness, ok_override, ok_reply, settings, start_request};
+use super::{
+    DurableState, EffectHarness, RecordedCommand, ok_override, ok_reply, settings, start_request,
+};
+use crate::effects::EffectsConfig;
 use crate::runtime::RuntimeEffectSink;
 
 const MESSAGE_ID: [u8; 16] = [9; 16];
@@ -54,6 +63,7 @@ fn seed_outbox_message(
         )),
         written_seq: 3,
         acknowledged_at_micros,
+        held_values: Vec::new(),
     };
     harness.runtime.state.lock().expect("lock").put_message(
         ColumnFamily::Flow,
@@ -250,4 +260,239 @@ async fn purge_requests_for_runs_not_purging_and_speculative_external_effects_do
             .is_empty()
     );
     harness.shutdown().await;
+}
+
+/// Child Flow ID that apply derives for the parent's first SubFlow condition.
+const CHILD_FLOW_ID: &str = "SubFlow:parent-ChargeStep-1-0";
+
+fn child_settings_config() -> EffectsConfig {
+    EffectsConfig {
+        child_run_settings: RunSettings {
+            retention_after_close_micros: 3 * 24 * 3600 * super::SECOND_MICROS,
+            ..settings()
+        },
+        ..EffectsConfig::default()
+    }
+}
+
+/// Starts "parent" and answers its WaitFor with one SubFlow condition; apply writes the
+/// child start into the parent's outbox.
+async fn start_parent_waiting_for_a_child(harness: &EffectHarness) -> RunId {
+    let parent_run = harness.start_flow(start_request("parent"), settings());
+    harness
+        .dispatcher
+        .next_dispatch()
+        .await
+        .complete_wait_for(InvokeWaitForMethodResponse {
+            waiting_condition: Some(WaitingCondition {
+                waiting_condition_type: WaitingConditionType::AllCompleted as i32,
+                sub_flow_conditions: vec![SubFlowCondition {
+                    condition_id: "child".to_owned(),
+                    sub_flow_type: "ChildFlow".to_owned(),
+                    start_step_type: "ChildStep".to_owned(),
+                    step_options: Some(StepOptions {
+                        skip_wait_for: true,
+                        ..StepOptions::default()
+                    }),
+                    ..SubFlowCondition::default()
+                }],
+                ..WaitingCondition::default()
+            }),
+            ..InvokeWaitForMethodResponse::default()
+        });
+    harness.settle().await;
+    parent_run
+}
+
+fn inbox_messages(harness: &EffectHarness) -> Vec<(InboxMessageCommand, CommandReply)> {
+    harness
+        .runtime
+        .commands_matching(|command| matches!(command, flow_command::Command::InboxMessage(_)))
+        .into_iter()
+        .filter_map(|recorded| match recorded.command.command {
+            Some(flow_command::Command::InboxMessage(message)) => Some((message, recorded.reply)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn outbox_acks(harness: &EffectHarness) -> Vec<RecordedCommand> {
+    harness
+        .runtime
+        .commands_matching(|command| matches!(command, flow_command::Command::OutboxAck(_)))
+}
+
+fn read_outbox_row(harness: &EffectHarness, parent_run: RunId, message_id: &[u8]) -> OutboxRecord {
+    let run = harness.run_location("parent", parent_run);
+    let bytes = harness
+        .runtime
+        .snapshot()
+        .get(
+            ColumnFamily::Flow,
+            &outbox_key(run.flow_hash, run.run_id, message_id),
+        )
+        .expect("memory reads never fail")
+        .expect("the outbox row exists");
+    OutboxRecord::decode(bytes.as_slice()).expect("the outbox row decodes")
+}
+
+fn child_run_exists(harness: &EffectHarness, new_run_id: &[u8]) -> bool {
+    let run = harness.run_location(
+        CHILD_FLOW_ID,
+        RunId::from_slice(new_run_id).expect("16-byte run ID"),
+    );
+    harness
+        .runtime
+        .snapshot()
+        .get(
+            ColumnFamily::Flow,
+            &run_singleton_key(run.flow_hash, run.run_id, RunTable::RunRecord),
+        )
+        .expect("memory reads never fail")
+        .is_some()
+}
+
+fn unavailable_reply() -> CommandReply {
+    CommandReply {
+        reply: Some(command_reply::Reply::Error(CommandErrorReply {
+            grpc_code: 14,
+            message: "latest child run is being purged".to_owned(),
+            ..CommandErrorReply::default()
+        })),
+    }
+}
+
+/// Replies UNAVAILABLE to the first `count` InboxMessage commands, then lets apply run.
+fn unavailable_inbox_override(count: usize) -> super::CommandOverride {
+    let remaining = Arc::new(AtomicUsize::new(count));
+    Box::new(move |command, _| {
+        let is_inbox = matches!(
+            command.command,
+            Some(flow_command::Command::InboxMessage(_))
+        );
+        let is_rejected = is_inbox
+            && remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+        is_rejected.then(unavailable_reply)
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn child_starts_are_delivered_with_a_new_run_id_and_the_configured_settings() {
+    let config = child_settings_config();
+    let harness = EffectHarness::with_config(DurableState::new(), config.clone());
+    harness.rebuild_all_partitions().await;
+    let parent_run = start_parent_waiting_for_a_child(&harness).await;
+
+    let inbox = inbox_messages(&harness);
+    assert_eq!(inbox.len(), 1);
+    let (message, reply) = &inbox[0];
+    assert_eq!(reply, &ok_reply());
+    assert_eq!(message.new_run_id.len(), 16);
+    assert_eq!(message.settings, Some(config.child_run_settings));
+    assert!(matches!(
+        message.payload,
+        Some(inbox_message_command::Payload::ChildStart(_))
+    ));
+    let source = message.source.as_ref().expect("source");
+    assert_eq!(source.flow_id, "parent");
+    assert_eq!(source.run_id, parent_run.as_bytes().to_vec());
+    assert_eq!(source.run_attempt, 1);
+
+    let child_run = RunId::from_slice(&message.new_run_id).expect("16-byte run ID");
+    let child = harness.run_record(CHILD_FLOW_ID, child_run);
+    assert_eq!(child.settings, Some(config.child_run_settings));
+    assert_eq!(child.status, FlowStatus::Running as i32);
+    assert_eq!(outbox_acks(&harness).len(), 1);
+    assert_ne!(
+        read_outbox_row(&harness, parent_run, &message.message_id).acknowledged_at_micros,
+        0
+    );
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_redelivered_child_start_with_a_new_run_id_starts_the_child_only_once() {
+    let config = child_settings_config();
+    let first = EffectHarness::with_config(DurableState::new(), config.clone());
+    // The ack is lost: it replies OK but never reaches the parent's state.
+    first.runtime.add_override(ok_override(|command| {
+        matches!(command, flow_command::Command::OutboxAck(_))
+    }));
+    first.rebuild_all_partitions().await;
+    let parent_run = start_parent_waiting_for_a_child(&first).await;
+    let first_delivery = inbox_messages(&first).remove(0).0;
+    assert!(child_run_exists(&first, &first_delivery.new_run_id));
+    let durable = first.durable.clone();
+    first.shutdown().await;
+
+    let second = EffectHarness::with_config(durable, config);
+    second.rebuild_all_partitions().await;
+    second.settle().await;
+    let redeliveries = inbox_messages(&second);
+    assert_eq!(redeliveries.len(), 1);
+    let (redelivery, reply) = &redeliveries[0];
+    assert_eq!(reply, &ok_reply(), "a duplicate is acknowledged");
+    assert_eq!(redelivery.message_id, first_delivery.message_id);
+    assert_ne!(redelivery.new_run_id, first_delivery.new_run_id);
+    assert!(child_run_exists(&second, &first_delivery.new_run_id));
+    assert!(
+        !child_run_exists(&second, &redelivery.new_run_id),
+        "inbox deduplication runs before the new run ID is used"
+    );
+    assert_eq!(outbox_acks(&second).len(), 1);
+    assert_ne!(
+        read_outbox_row(&second, parent_run, &redelivery.message_id).acknowledged_at_micros,
+        0
+    );
+    second.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn receiver_errors_are_retried_without_acknowledging_and_survive_a_restart() {
+    let first = EffectHarness::new();
+    first
+        .runtime
+        .add_override(unavailable_inbox_override(usize::MAX));
+    first.rebuild_all_partitions().await;
+    let parent_run = start_parent_waiting_for_a_child(&first).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    first.settle().await;
+    let rejected = inbox_messages(&first);
+    assert!(
+        rejected.len() >= 3,
+        "errors are retried: {}",
+        rejected.len()
+    );
+    assert!(
+        outbox_acks(&first).is_empty(),
+        "an error reply is never acknowledged"
+    );
+    let message_id = rejected[0].0.message_id.clone();
+    assert_eq!(
+        read_outbox_row(&first, parent_run, &message_id).acknowledged_at_micros,
+        0
+    );
+    let durable = first.durable.clone();
+    first.shutdown().await;
+
+    let second = EffectHarness::with_config(durable, EffectsConfig::default());
+    second.runtime.add_override(unavailable_inbox_override(1));
+    second.rebuild_all_partitions().await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    second.settle().await;
+    let deliveries = inbox_messages(&second);
+    assert_eq!(deliveries.len(), 2);
+    assert_eq!(deliveries[0].1, unavailable_reply());
+    assert_eq!(deliveries[1].1, ok_reply());
+    assert!(child_run_exists(&second, &deliveries[1].0.new_run_id));
+    assert_eq!(outbox_acks(&second).len(), 1);
+    assert_ne!(
+        read_outbox_row(&second, parent_run, &message_id).acknowledged_at_micros,
+        0
+    );
+    second.shutdown().await;
 }

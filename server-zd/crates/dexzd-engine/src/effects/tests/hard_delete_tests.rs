@@ -384,3 +384,59 @@ async fn server_errors_before_dispatch_fail_the_attempt_so_it_retries() {
     assert!(!failure.is_non_retryable);
     harness.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_hard_delete_read_times_out_the_method_before_dispatch() {
+    let (durable, object_fault) = super::SwitchableFault::install(
+        vec![dexzd_object_store::ObjectStoreOperation::Get],
+        dexzd_object_store::FaultAction::Delay(std::time::Duration::from_secs(24 * 3600)),
+    );
+    let harness = EffectHarness::with_config(durable, crate::effects::EffectsConfig::default());
+    harness.rebuild_all_partitions().await;
+    harness
+        .runtime
+        .busy_lock_keys
+        .lock()
+        .expect("lock")
+        .insert("secret".to_owned());
+    let mut request = start_request("order-1");
+    request.step_options = Some(dexzd_protocol::dex::StepOptions {
+        wait_for_lock_attribute_keys: vec!["secret".to_owned()],
+        wait_for_timeout_seconds: 30,
+        ..dexzd_protocol::dex::StepOptions::default()
+    });
+    let run_id = harness.start_flow(request, settings());
+    set_hard_delete_attribute(&harness, "order-1", run_id, "secret", "v1").await;
+    object_fault.set_enabled(true);
+    harness.runtime.busy_lock_keys.lock().expect("lock").clear();
+    // The parked start retries after one second; its hard-delete read then hangs.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    harness.settle().await;
+    assert!(
+        harness
+            .runtime
+            .commands_matching(super::is_attempt_failed)
+            .is_empty()
+    );
+
+    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    harness.settle().await;
+    let failures = harness.runtime.commands_matching(super::is_attempt_failed);
+    let Some(flow_command::Command::StepAttemptFailed(failure)) = &failures[0].command.command
+    else {
+        panic!("expected a failure");
+    };
+    assert_eq!(
+        failure.kind,
+        dexzd_protocol::dexzd::v1::StepAttemptFailureKind::MethodTimeout as i32
+    );
+    assert_eq!(
+        harness
+            .dispatcher
+            .dispatch_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the Worker never received the attempt"
+    );
+    harness.shutdown().await;
+}

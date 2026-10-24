@@ -63,6 +63,12 @@ enum AttemptEnd {
     Canceled,
 }
 
+/// Outcome of preparing the Worker request.
+enum PreparedRequest {
+    Ready(Box<MethodRequest>),
+    Ended(AttemptEnd),
+}
+
 struct AttemptFailure {
     kind: StepAttemptFailureKind,
     worker_error: Option<WorkerErrorResponse>,
@@ -109,6 +115,8 @@ impl MethodAttempt {
     }
 
     async fn run_attempt(&self) -> Result<(), EffectError> {
+        // The owner-memory method timeout covers preparation, so slow state or object reads count.
+        let attempt_started = Instant::now();
         let state = self
             .retry_transient(|| async {
                 let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
@@ -127,21 +135,12 @@ impl MethodAttempt {
             dex::StepDurability::Async => CommitUrgency::Batched,
             _ => CommitUrgency::Prompt,
         };
-        let hard_delete_values = self
-            .retry_transient(|| self.read_hard_delete_values(&state))
-            .await?;
-        let request = build_method_request(&state, &hard_delete_values)?;
-        let end = if request.encoded_len() > self.context.config.max_worker_request_bytes {
-            AttemptEnd::Failure(AttemptFailure::server(
-                StepAttemptFailureKind::RequestTooLarge,
-                format!(
-                    "Worker request of {} bytes exceeds the {} byte message limit",
-                    request.encoded_len(),
-                    self.context.config.max_worker_request_bytes
-                ),
-            ))
-        } else {
-            self.dispatch_and_follow(&state, request).await
+        let timeouts = AttemptTimeouts::new(&state, self.key.method, attempt_started);
+        let end = match self.prepare_request(&state, &timeouts).await? {
+            PreparedRequest::Ready(request) => {
+                self.dispatch_and_follow(&state, *request, &timeouts).await
+            }
+            PreparedRequest::Ended(end) => end,
         };
         let sticky_app_worker_id = state.run_record.sticky_app_worker_id.clone();
         match end {
@@ -155,6 +154,37 @@ impl MethodAttempt {
                 self.complete(&state, *frame, app_worker_id, urgency).await
             }
         }
+    }
+
+    /// Reads the hard-delete values and builds the Worker request before the method deadline.
+    ///
+    /// Returns the request, or the attempt's end when it was canceled, timed out, or is too large.
+    async fn prepare_request(
+        &self,
+        state: &MethodAttemptState,
+        timeouts: &AttemptTimeouts,
+    ) -> Result<PreparedRequest, EffectError> {
+        let hard_delete_values = tokio::select! {
+            () = self.cancel.cancelled() => return Ok(PreparedRequest::Ended(AttemptEnd::Canceled)),
+            () = sleep_until(timeouts.method_deadline) => {
+                return Ok(PreparedRequest::Ended(AttemptEnd::Failure(timeouts.method_timeout_failure())));
+            }
+            values = self.retry_transient(|| self.read_hard_delete_values(state)) => values?,
+        };
+        let request = build_method_request(state, &hard_delete_values)?;
+        if request.encoded_len() > self.context.config.max_worker_request_bytes {
+            return Ok(PreparedRequest::Ended(AttemptEnd::Failure(
+                AttemptFailure::server(
+                    StepAttemptFailureKind::RequestTooLarge,
+                    format!(
+                        "Worker request of {} bytes exceeds the {} byte message limit",
+                        request.encoded_len(),
+                        self.context.config.max_worker_request_bytes
+                    ),
+                ),
+            )));
+        }
+        Ok(PreparedRequest::Ready(Box::new(request)))
     }
 
     /// Runs `operation` until it succeeds or fails permanently, retrying transient failures.
@@ -231,15 +261,17 @@ impl MethodAttempt {
         &self,
         state: &MethodAttemptState,
         request: MethodRequest,
+        timeouts: &AttemptTimeouts,
     ) -> AttemptEnd {
-        let (method_timeout, heartbeat_timeout) = method_timeouts(state, self.key.method);
+        let heartbeat_timeout = timeouts.heartbeat_timeout;
+        let method_deadline = timeouts.method_deadline;
         let started = Instant::now();
-        let method_deadline = started + method_timeout;
+        let remaining = method_deadline.saturating_duration_since(started);
         let wall_deadline = unix_micros_to_system_time(
             self.context
                 .clock
                 .now_unix_micros()
-                .saturating_add(i64::try_from(method_timeout.as_micros()).unwrap_or(i64::MAX)),
+                .saturating_add(i64::try_from(remaining.as_micros()).unwrap_or(i64::MAX)),
         );
         let sticky = &state.run_record.sticky_app_worker_id;
         let dispatch_request = MethodDispatchRequest {
@@ -276,10 +308,7 @@ impl MethodAttempt {
                 }
                 () = sleep_until(method_deadline) => {
                     session.cancel();
-                    return AttemptEnd::Failure(AttemptFailure::server(
-                        StepAttemptFailureKind::MethodTimeout,
-                        format!("method timeout of {}s expired", method_timeout.as_secs()),
-                    ));
+                    return AttemptEnd::Failure(timeouts.method_timeout_failure());
                 }
                 () = sleep_until(heartbeat_deadline) => {
                     session.cancel();
@@ -469,18 +498,43 @@ impl MethodAttempt {
     }
 }
 
-/// Returns the attempt's method timeout and heartbeat timeout, with the Go Server defaults.
-fn method_timeouts(state: &MethodAttemptState, method: i32) -> (Duration, Duration) {
-    let options = state.step_execution.options.clone().unwrap_or_default();
-    let method_timeout_seconds = if method == StepMethod::WaitFor as i32 {
-        options.wait_for_timeout_seconds
-    } else {
-        options.execute_timeout_seconds
-    };
-    let method_timeout = positive_seconds(method_timeout_seconds).unwrap_or(DEFAULT_METHOD_TIMEOUT);
-    let heartbeat_timeout =
-        positive_seconds(options.heartbeat_timeout_seconds).unwrap_or(DEFAULT_HEARTBEAT_TIMEOUT);
-    (method_timeout, heartbeat_timeout)
+/// The attempt's owner-memory timeouts.
+struct AttemptTimeouts {
+    method_timeout: Duration,
+    /// When the method timeout expires, counted from the attempt's start.
+    method_deadline: Instant,
+    heartbeat_timeout: Duration,
+}
+
+impl AttemptTimeouts {
+    /// Returns the attempt's method timeout and heartbeat timeout, with the Go Server defaults.
+    fn new(state: &MethodAttemptState, method: i32, attempt_started: Instant) -> Self {
+        let options = state.step_execution.options.clone().unwrap_or_default();
+        let method_timeout_seconds = if method == StepMethod::WaitFor as i32 {
+            options.wait_for_timeout_seconds
+        } else {
+            options.execute_timeout_seconds
+        };
+        let method_timeout =
+            positive_seconds(method_timeout_seconds).unwrap_or(DEFAULT_METHOD_TIMEOUT);
+        let heartbeat_timeout = positive_seconds(options.heartbeat_timeout_seconds)
+            .unwrap_or(DEFAULT_HEARTBEAT_TIMEOUT);
+        Self {
+            method_timeout,
+            method_deadline: attempt_started + method_timeout,
+            heartbeat_timeout,
+        }
+    }
+
+    fn method_timeout_failure(&self) -> AttemptFailure {
+        AttemptFailure::server(
+            StepAttemptFailureKind::MethodTimeout,
+            format!(
+                "method timeout of {}s expired",
+                self.method_timeout.as_secs()
+            ),
+        )
+    }
 }
 
 fn positive_seconds(seconds: i32) -> Option<Duration> {
@@ -524,6 +578,10 @@ fn attempt_end(outcome: DispatchOutcome) -> AttemptEnd {
             ))
         }
         DispatchOutcome::Cancelled => AttemptEnd::Canceled,
+        DispatchOutcome::ServerClosing => AttemptEnd::Failure(AttemptFailure::server(
+            StepAttemptFailureKind::DispatchError,
+            "matching server is closing",
+        )),
         DispatchOutcome::DeadlineExceeded => AttemptEnd::Failure(AttemptFailure::server(
             StepAttemptFailureKind::MethodTimeout,
             "method deadline elapsed before the Worker result",

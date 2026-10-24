@@ -168,11 +168,11 @@ impl SnapshotService {
             self.object_store.as_ref(),
             self.clock.as_ref(),
             |manifest| {
-                let mut change = dexzd_cluster_metadata::Change::Unchanged;
+                let mut change = dexzd_cluster_metadata::ManifestChange::Unchanged;
                 for partition in &mut manifest.partitions {
                     if partition.snapshot.as_ref() != Some(reference) {
                         partition.snapshot = Some(reference.clone());
-                        change = dexzd_cluster_metadata::Change::Changed;
+                        change = dexzd_cluster_metadata::ManifestChange::Changed;
                     }
                 }
                 Ok(change)
