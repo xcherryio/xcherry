@@ -9,12 +9,16 @@
 //! Snapshot scheduling, snapshot and log retention.
 
 mod log_cleanup;
+mod ownership_fence;
 mod snapshot_config;
+mod snapshot_retention;
 mod snapshot_service;
 
 pub use snapshot_config::SnapshotConfig;
 
 pub(crate) use log_cleanup::LogCleanup;
+pub(crate) use ownership_fence::OwnershipFence;
+pub(crate) use snapshot_retention::SnapshotRetention;
 pub(crate) use snapshot_service::SnapshotService;
 
 /// A snapshot or cleanup step failed; the service retries later.
@@ -38,4 +42,10 @@ pub enum SnapshotError {
     /// The node stopped while the snapshot was taken.
     #[error("the node stopped")]
     NodeStopped,
+    /// Another epoch owns the cluster, so this process must not publish or delete anything.
+    #[error("snapshot fenced: {detail}")]
+    Fenced {
+        /// Which epoch owns the cluster.
+        detail: String,
+    },
 }

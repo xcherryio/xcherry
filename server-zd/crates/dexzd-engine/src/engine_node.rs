@@ -35,7 +35,9 @@ use crate::recovery::{
     ClusterMetadata, EngineRuntimeHooks, EngineServices, EngineStartError, LocalStoreConfig,
     LocalStoreRequirements, LogReplay, open_local_store,
 };
-use crate::snapshots::{LogCleanup, SnapshotConfig, SnapshotError, SnapshotService};
+use crate::snapshots::{
+    LogCleanup, OwnershipFence, SnapshotConfig, SnapshotError, SnapshotRetention, SnapshotService,
+};
 
 /// Configuration sections of an engine node.
 #[derive(Debug, Clone)]
@@ -98,18 +100,18 @@ impl EngineNode {
         )
         .await?;
         let partition_count = metadata.partition_count();
+        let cluster_id = metadata.cluster_id()?;
         let stream = StreamIdentity {
-            cluster_id: metadata.cluster_id()?,
+            cluster_id,
             node_id: config.node.node_id.clone(),
-            incarnation: config.node.incarnation,
+            incarnation: metadata.streams.serving_incarnation,
         };
         let store = open_local_store(
             &config.local_store,
             object_store.as_ref(),
             &LocalStoreRequirements {
                 snapshot: metadata.node_snapshot(&config.node.node_id),
-                first_retained_seq: metadata
-                    .first_retained_seq(&config.node.node_id, config.node.incarnation),
+                streams: &metadata.streams,
                 partition_count,
             },
         )
@@ -163,7 +165,8 @@ impl EngineNode {
         let replayed = LogReplay {
             object_store: object_store.as_ref(),
             clock: clock.as_ref(),
-            stream: &stream,
+            cluster_id,
+            streams: &metadata.streams,
             store: &store,
             appliers: &appliers,
             state: &state,
@@ -223,6 +226,19 @@ impl EngineNode {
             clock: clock.clone(),
             appliers: appliers.clone(),
             progress,
+            retention: SnapshotRetention {
+                object_store: object_store.clone(),
+                node_id: stream.node_id.clone(),
+                retained_count: config.snapshots.retained_count,
+                deletion_delay: config.snapshots.deletion_delay,
+            },
+            fence: OwnershipFence {
+                object_store: object_store.clone(),
+                clock: clock.clone(),
+                state: state.clone(),
+                node_id: stream.node_id.clone(),
+                epoch,
+            },
             log_cleanup: LogCleanup {
                 object_store,
                 clock,
@@ -230,7 +246,7 @@ impl EngineNode {
                 partition_count,
                 deletion_delay: config.snapshots.deletion_delay,
             },
-            cluster_id: metadata.cluster_id()?,
+            cluster_id,
             epoch,
             node_meta_lock,
             config: config.snapshots.clone(),

@@ -6,22 +6,23 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use dexzd_clock::WallClock;
+use dexzd_cluster_metadata::ManifestChange;
 use dexzd_object_store::ObjectStore;
-use dexzd_protocol::dexzd::v1::{LogPosition, SnapshotManifest, SnapshotReference};
-use dexzd_storage::{
-    LocalReadView, RestoredLocalStore, SnapshotIdentity, create_snapshot, retain_snapshots,
-};
+use dexzd_protocol::dexzd::v1::{LogPosition, Manifest, SnapshotManifest, SnapshotReference};
+use dexzd_storage::{LocalReadView, RestoredLocalStore, SnapshotIdentity, create_snapshot};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::commit::{CommitProgress, EngineLocalStore, PartitionApplierPool};
 use crate::snapshots::log_cleanup::LogCleanup;
+use crate::snapshots::ownership_fence::OwnershipFence;
+use crate::snapshots::snapshot_retention::SnapshotRetention;
 use crate::snapshots::{SnapshotConfig, SnapshotError};
 
 /// Takes snapshots on schedule, records them in the manifest, and cleans up old objects.
@@ -32,6 +33,8 @@ pub(crate) struct SnapshotService {
     pub(crate) appliers: Arc<PartitionApplierPool>,
     pub(crate) progress: Arc<CommitProgress>,
     pub(crate) log_cleanup: LogCleanup,
+    pub(crate) retention: SnapshotRetention,
+    pub(crate) fence: OwnershipFence,
     pub(crate) cluster_id: [u8; 16],
     /// Epoch of this process; every batch it routes carries it.
     pub(crate) epoch: u64,
@@ -49,6 +52,7 @@ impl SnapshotService {
             tokio::select! {
                 biased;
                 () = cancellation.cancelled() => return,
+                _ = self.fence.state.wait_stopped() => return,
                 () = tokio::time::sleep(self.config.check_interval) => {}
             }
             let committed_bytes = self.committed_log_bytes();
@@ -78,8 +82,12 @@ impl SnapshotService {
     }
 
     /// Uploads a snapshot, points every partition at it, and deletes covered objects.
+    ///
+    /// Nothing is published or deleted once the node stops serving or another epoch owns the
+    /// cluster.
     pub(crate) async fn take_snapshot(&self) -> Result<SnapshotReference, SnapshotError> {
         let _serialized = self.snapshot_lock.lock().await;
+        self.fence.ensure_serving()?;
         let stream = &self.log_cleanup.stream;
         let last_routed_seq = self.progress.last_routed_seq.load(Ordering::Acquire);
         if last_routed_seq > 0 {
@@ -103,25 +111,26 @@ impl SnapshotService {
             snapshot_number: manifest.snapshot_number,
             manifest_key,
         };
-        self.record_snapshot(&reference).await?;
+        let cluster_manifest = self.record_snapshot(&reference).await?;
         tracing::info!(
             snapshot_number = manifest.snapshot_number,
             files = manifest.files.len(),
             elapsed_ms = started.elapsed().as_millis(),
             "snapshot complete"
         );
-        let lineage = Uuid::from_slice(&manifest.lineage_id)
-            .map_err(|error| SnapshotError::Invalid(error.to_string()))?;
-        retain_snapshots(
-            self.object_store.as_ref(),
-            &stream.node_id,
-            &manifest.lineage_id,
-            self.config.retained_count,
-            self.config.deletion_delay,
-            self.clock.now_unix_micros(),
-        )
-        .await?;
-        self.log_cleanup.run_once(&lineage.to_string()).await?;
+        let referenced_keys: BTreeSet<String> = cluster_manifest
+            .partitions
+            .iter()
+            .filter_map(|partition| partition.snapshot.as_ref())
+            .map(|snapshot| snapshot.manifest_key.clone())
+            .collect();
+        let retained = self
+            .retention
+            .run_once(&referenced_keys, &self.fence, self.clock.now_unix_micros())
+            .await?;
+        self.log_cleanup
+            .run_once(&retained, &manifest, &self.fence)
+            .await?;
         Ok(reference)
     }
 
@@ -163,23 +172,22 @@ impl SnapshotService {
         .map_err(SnapshotError::from)
     }
 
-    async fn record_snapshot(&self, reference: &SnapshotReference) -> Result<(), SnapshotError> {
-        dexzd_cluster_metadata::update_manifest(
-            self.object_store.as_ref(),
-            self.clock.as_ref(),
-            |manifest| {
-                let mut change = dexzd_cluster_metadata::ManifestChange::Unchanged;
+    async fn record_snapshot(
+        &self,
+        reference: &SnapshotReference,
+    ) -> Result<Manifest, SnapshotError> {
+        self.fence
+            .update_manifest(|manifest| {
+                let mut change = ManifestChange::Unchanged;
                 for partition in &mut manifest.partitions {
                     if partition.snapshot.as_ref() != Some(reference) {
                         partition.snapshot = Some(reference.clone());
-                        change = dexzd_cluster_metadata::ManifestChange::Changed;
+                        change = ManifestChange::Changed;
                     }
                 }
-                Ok(change)
-            },
-        )
-        .await?;
-        Ok(())
+                change
+            })
+            .await
     }
 
     fn committed_log_bytes(&self) -> u64 {

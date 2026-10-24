@@ -169,3 +169,86 @@ async fn a_failed_snapshot_keeps_serving_and_succeeds_later() {
     assert_eq!(snapshot_manifest_keys(&cluster).await.len(), 1);
     test.node.shutdown().await;
 }
+
+async fn snapshot_object_keys(cluster: &TestCluster) -> Vec<String> {
+    cluster
+        .object_store
+        .list("snapshot/", None, 1000)
+        .await
+        .expect("list snapshots")
+        .objects
+        .into_iter()
+        .map(|object| object.key)
+        .collect()
+}
+
+fn lineage_of(snapshot_key: &str) -> String {
+    snapshot_key
+        .split('/')
+        .nth(2)
+        .expect("snapshot keys name a lineage")
+        .to_owned()
+}
+
+#[tokio::test(start_paused = true)]
+async fn retention_reclaims_the_lineage_that_a_restore_replaced() {
+    let mut cluster = TestCluster::new();
+    let mut config = cluster.config(LocalStoreConfig::InMemory);
+    config.snapshots.deletion_delay = Duration::ZERO;
+    let retained_count = config.snapshots.retained_count;
+    let first = cluster.start_with(&config).await.expect("node starts");
+    for _ in 0..2 {
+        first.commit_prompt("lineage-flow", 1).await;
+        first.node.take_snapshot().await.expect("snapshot succeeds");
+    }
+    let replaced_lineage = lineage_of(&snapshot_manifest_keys(&cluster).await[0]);
+    drop(first);
+
+    let second = cluster
+        .start_with(&config)
+        .await
+        .expect("node restores the snapshot");
+    for _ in 0..=retained_count {
+        second.commit_prompt("lineage-flow", 1).await;
+        second
+            .node
+            .take_snapshot()
+            .await
+            .expect("snapshot succeeds");
+    }
+    let manifest_keys = snapshot_manifest_keys(&cluster).await;
+    assert_eq!(manifest_keys.len(), retained_count, "{manifest_keys:?}");
+    let objects = snapshot_object_keys(&cluster).await;
+    assert!(
+        objects
+            .iter()
+            .all(|key| lineage_of(key) != replaced_lineage),
+        "{objects:?}"
+    );
+    for key in &manifest_keys {
+        let content = cluster
+            .object_store
+            .get(key)
+            .await
+            .expect("read manifest")
+            .expect("manifest exists");
+        let manifest = SnapshotManifest::decode(content.bytes).expect("decode manifest");
+        assert!(
+            manifest
+                .files
+                .iter()
+                .all(|file| objects.contains(&file.object_key))
+        );
+    }
+    drop(second);
+
+    let restarted = cluster
+        .start_with(&config)
+        .await
+        .expect("node restores the newest snapshot");
+    assert_eq!(
+        restarted.committed_count("lineage-flow").await,
+        3 + retained_count as u64
+    );
+    restarted.node.shutdown().await;
+}
