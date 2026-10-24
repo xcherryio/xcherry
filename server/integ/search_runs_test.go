@@ -55,6 +55,8 @@ func verifySearchRunInclusion(t *testing.T, backend service.BackendType) {
 	}
 	runtime := startDexService(t, cfg)
 	flowClient := runtime.FlowClient
+	// C3: server-zd never returns CONTINUED_AS_NEW runs.
+	isContinueAsNewSupported := !isServerZDBinaryMode()
 	completedID := "search-completed-" + uuid.NewString()
 	workerTarget := startWorker(t, basic.NewHandler())
 	_, err := flowClient.StartFlow(ctx, &dexpb.StartFlowRequest{
@@ -134,7 +136,7 @@ func verifySearchRunInclusion(t *testing.T, backend service.BackendType) {
 				statuses[run.GetFlowId()] = run.GetFlowStatus()
 			}
 		}
-		return continued > 0 && len(statuses) == len(expected) && sameSearchStatuses(statuses, expected)
+		return (continued > 0) == isContinueAsNewSupported && len(statuses) == len(expected) && sameSearchStatuses(statuses, expected)
 	}, 30*time.Second, 200*time.Millisecond, "expected full visible execution chain and other statuses")
 
 	for _, explicitFalse := range []bool{false, true} {
@@ -179,7 +181,11 @@ func verifySearchRunInclusion(t *testing.T, backend service.BackendType) {
 		Query: continuedQuery, PageSize: 100, IncludeContinuedAsNew: true,
 	})
 	require.NoError(t, err)
-	require.NotEmpty(t, page.GetFlowRuns())
+	if isContinueAsNewSupported {
+		require.NotEmpty(t, page.GetFlowRuns())
+	} else {
+		require.Empty(t, page.GetFlowRuns())
+	}
 	for _, run := range page.GetFlowRuns() {
 		require.Equal(t, dexpb.FlowStatus_FLOW_STATUS_CONTINUED_AS_NEW, run.GetFlowStatus())
 	}
@@ -198,7 +204,11 @@ func verifySearchRunInclusion(t *testing.T, backend service.BackendType) {
 	for _, run := range page.GetFlowRuns() {
 		foundContinued = foundContinued || run.GetFlowStatus() == dexpb.FlowStatus_FLOW_STATUS_CONTINUED_AS_NEW
 	}
-	require.True(t, foundContinued, "inclusive empty query must allow earlier runs")
+	if isContinueAsNewSupported {
+		require.True(t, foundContinued, "inclusive empty query must allow earlier runs")
+	} else {
+		require.False(t, foundContinued)
+	}
 	for _, emptyQuery := range []string{"", "   "} {
 		page, err = flowClient.SearchFlows(ctx, &dexpb.SearchFlowsRequest{Query: emptyQuery, PageSize: 10})
 		require.NoError(t, err)

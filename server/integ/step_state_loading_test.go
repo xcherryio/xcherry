@@ -132,6 +132,8 @@ func TestStepStateLoadingTemporal(t *testing.T) {
 	if !*temporalIntegTest {
 		t.Skip()
 	}
+	// C8: server-zd rejects the Flow start delay that orders this scenario.
+	requireGoServerSetting(t, "Flow start delay")
 	for iteration := 0; iteration < *repeatIntegTest; iteration++ {
 		doTestStepStateLoading(t, service.BackendTypeTemporal)
 	}

@@ -63,10 +63,15 @@ type Handler struct {
 	wasQueuedLoserExecuted   bool
 	wasWaitingLoserExecuted  bool
 	localTimeoutLoserAttempt int32
+	heartbeatTimeoutSeconds  int32
 }
 
 func NewHandler() *Handler {
-	return &Handler{canceledHandlers: map[string]bool{}}
+	return NewHandlerWithHeartbeatTimeout(3)
+}
+
+func NewHandlerWithHeartbeatTimeout(heartbeatTimeoutSeconds int32) *Handler {
+	return &Handler{canceledHandlers: map[string]bool{}, heartbeatTimeoutSeconds: heartbeatTimeoutSeconds}
 }
 
 func (h *Handler) InvokeWorkerRPC(
@@ -223,11 +228,11 @@ func (h *Handler) invokeExecuteMethod(
 		return next(
 			movement(Winner, asyncExecuteAfterWaitOptions()),
 			movement(SiblingWait, nil),
-			movement(SiblingExecute, syncExecuteOptions(true)),
+			movement(SiblingExecute, syncExecuteOptions(h.heartbeatTimeoutSeconds)),
 			movement(GlobalWait, nil),
-			movement(GlobalWaitForMethod, syncWaitForOptions()),
-			movement(GlobalExecute, syncExecuteOptions(true)),
-			movement(GlobalNoHeartbeat, syncExecuteOptions(false)),
+			movement(GlobalWaitForMethod, syncWaitForOptions(h.heartbeatTimeoutSeconds)),
+			movement(GlobalExecute, syncExecuteOptions(h.heartbeatTimeoutSeconds)),
+			movement(GlobalNoHeartbeat, syncExecuteOptions(0)),
 			movement(ParentB, nil),
 		), nil
 	case ParentB:
@@ -265,8 +270,8 @@ func (h *Handler) invokeExecuteMethod(
 		return graceful(), nil
 	case QueuedRoot:
 		return next(
-			movement(QueuedProducer, syncExecuteOptions(false)),
-			movement(QueuedWinner, syncExecuteOptions(false)),
+			movement(QueuedProducer, syncExecuteOptions(0)),
+			movement(QueuedWinner, syncExecuteOptions(0)),
 			movement(QueuedWaitingLoser, nil),
 		), nil
 	case QueuedProducer:
@@ -383,23 +388,20 @@ func movement(stepType string, options *dexpb.StepOptions) *dexpb.StepMovement {
 	return &dexpb.StepMovement{StepType: stepType, StepOptions: options}
 }
 
-func syncExecuteOptions(isHeartbeatEnabled bool) *dexpb.StepOptions {
-	options := &dexpb.StepOptions{
+func syncExecuteOptions(heartbeatTimeoutSeconds int32) *dexpb.StepOptions {
+	return &dexpb.StepOptions{
 		SkipWaitFor:               true,
 		ExecuteDurabilityOverride: dexpb.StepDurability_STEP_DURABILITY_SYNC,
 		ExecuteTimeoutSeconds:     20,
+		HeartbeatTimeoutSeconds:   heartbeatTimeoutSeconds,
 	}
-	if isHeartbeatEnabled {
-		options.HeartbeatTimeoutSeconds = 3
-	}
-	return options
 }
 
-func syncWaitForOptions() *dexpb.StepOptions {
+func syncWaitForOptions(heartbeatTimeoutSeconds int32) *dexpb.StepOptions {
 	return &dexpb.StepOptions{
 		WaitForDurabilityOverride: dexpb.StepDurability_STEP_DURABILITY_SYNC,
 		WaitForTimeoutSeconds:     20,
-		HeartbeatTimeoutSeconds:   3,
+		HeartbeatTimeoutSeconds:   heartbeatTimeoutSeconds,
 	}
 }
 
