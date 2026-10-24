@@ -31,6 +31,7 @@ use super::search_result::response_entry;
 
 pub(super) const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SCHEMA_SETUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Waits for an application-defined projection watermark before reading search results.
 #[async_trait]
@@ -66,9 +67,8 @@ impl ParadeDbSearchBackend {
         for slot_index in 0..pool_size {
             let mut slot = ConnectionSlot::open(configuration).await?;
             if slot_index == 0 {
-                ensure_schema(&mut slot.client)
-                    .await
-                    .map_err(schema_search_error)?;
+                slot.ensure_schema_with_timeout(SCHEMA_SETUP_TIMEOUT)
+                    .await?;
             }
             slots.push(Mutex::new(slot));
         }
@@ -212,6 +212,18 @@ impl ConnectionSlot {
         })
     }
 
+    async fn ensure_schema_with_timeout(&mut self, timeout: Duration) -> Result<(), SearchError> {
+        match tokio::time::timeout(timeout, ensure_schema(&mut self.client)).await {
+            Ok(result) => result.map_err(schema_search_error),
+            Err(_) => {
+                self.invalidate();
+                Err(SearchError::Unavailable(format!(
+                    "ensure ParadeDB visibility schema timed out after {timeout:?}"
+                )))
+            }
+        }
+    }
+
     pub(super) async fn reconnect(&mut self, configuration: &Config) -> Result<(), SearchError> {
         let replacement = Self::open(configuration).await?;
         *self = replacement;
@@ -339,7 +351,7 @@ fn is_transient_sqlstate(sqlstate: &str) -> bool {
         || sqlstate.starts_with("53")
         || matches!(
             sqlstate,
-            "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
+            "55P03" | "57014" | "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
         )
 }
 
@@ -398,6 +410,8 @@ mod tests {
             ("08006", true),
             ("08P01", true),
             ("53100", true),
+            ("55P03", true),
+            ("57014", true),
             ("57P01", true),
             ("57P02", true),
             ("57P03", true),
@@ -465,6 +479,59 @@ mod tests {
             classify_database_error("connect to ParadeDB", error),
             SearchError::Unavailable(message) if message.contains("SQLSTATE none")
         ));
+    }
+
+    #[tokio::test]
+    async fn schema_setup_timeout_retires_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake PostgreSQL listener binds");
+        let port = listener
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client connects");
+            let startup_length = stream.read_u32().await.expect("startup has a length");
+            let mut startup = vec![0; startup_length as usize - 4];
+            stream
+                .read_exact(&mut startup)
+                .await
+                .expect("client sends startup parameters");
+            stream
+                .write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
+                .await
+                .expect("server accepts startup");
+            assert_eq!(stream.read_u8().await.expect("schema query starts"), b'Q');
+            let query_length = stream.read_u32().await.expect("query has a length");
+            let mut query = vec![0; query_length as usize - 4];
+            stream
+                .read_exact(&mut query)
+                .await
+                .expect("client sends schema query");
+            let mut next_byte = [0];
+            assert_eq!(stream.read(&mut next_byte).await.expect("socket closes"), 0);
+        });
+        let mut configuration = Config::new();
+        configuration.host("127.0.0.1").port(port).user("test");
+        let mut slot = ConnectionSlot::open(&configuration)
+            .await
+            .expect("fake server accepts startup");
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            slot.ensure_schema_with_timeout(Duration::from_millis(50)),
+        )
+        .await
+        .expect("schema setup has a client-side deadline");
+        assert!(matches!(
+            result,
+            Err(SearchError::Unavailable(message)) if message.contains("schema") && message.contains("timed out")
+        ));
+        assert!(slot.is_disconnected());
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("stalled connection closes promptly")
+            .expect("stalled connection is retired");
     }
 
     async fn rejected_startup_error(sqlstate: &str) -> tokio_postgres::Error {
