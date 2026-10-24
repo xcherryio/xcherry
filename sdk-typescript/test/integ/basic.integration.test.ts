@@ -156,6 +156,7 @@ test("waitForStepCompletion observes the requested Step", async () => {
 });
 
 test("waitFor failure can proceed to execute", async (context) => {
+  // C21: server-zd rejects Step failure policies.
   if (await skipIfServerZD(context, "Step failure policies")) return;
   const flow = new ProceedOnWaitFailureFlow();
   await withEnvironment([flow], async ({ client }) => {
@@ -175,6 +176,7 @@ test("Steps with and without waitFor compose", async () => {
 });
 
 test("movement options do not mutate Step defaults", async (context) => {
+  // C21: server-zd rejects Step failure policies.
   if (await skipIfServerZD(context, "Step failure policies")) return;
   const flow = new ImmutableStepOptionsFlow();
   await withEnvironment([flow], async ({ client }) => {

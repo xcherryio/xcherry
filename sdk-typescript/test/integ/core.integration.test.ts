@@ -148,6 +148,7 @@ test("execute-only Steps survive Continue-As-New", async () => {
 });
 
 test("movement Step options override defaults", async (context) => {
+  // C21: server-zd rejects Step failure policies.
   if (await skipIfServerZD(context, "Step failure policies")) return;
   const flow = new StateOptionsOverrideFlow();
   await withEnvironment([flow], async ({ client }) => {
@@ -174,6 +175,7 @@ for (const [name, flow] of [
   ["without-wait", new StateRecoveryNoWaitFlow()],
 ] as const) {
   test(`execute failure recovery ${name}`, async (context) => {
+    // C21: server-zd rejects Step failure policies.
     if (await skipIfServerZD(context, "Step failure policies")) return;
     await withEnvironment([flow], async ({ client }) => {
       const id = flowId(`state-recovery-${name}`);

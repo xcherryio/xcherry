@@ -59,6 +59,7 @@ def test_state_options_locks() -> None:
 
 
 def test_movement_options_override_step_defaults() -> None:
+    # C21: server-zd rejects Step failure policies.
     skip_if_server_zd("Step failure policies")
     flow = StateOptionsOverrideFlow()
     with DexDevTestEnvironment(flow) as environment:
@@ -70,6 +71,7 @@ def test_movement_options_override_step_defaults() -> None:
 
 
 def test_execute_failure_recovery_with_wait_for() -> None:
+    # C21: server-zd rejects Step failure policies.
     skip_if_server_zd("Step failure policies")
     flow = StateRecoveryFlow()
     with DexDevTestEnvironment(flow) as environment:
@@ -82,6 +84,7 @@ def test_execute_failure_recovery_with_wait_for() -> None:
 
 
 def test_execute_failure_recovery_without_wait_for() -> None:
+    # C21: server-zd rejects Step failure policies.
     skip_if_server_zd("Step failure policies")
     flow = StateRecoveryNoWaitFlow()
     with DexDevTestEnvironment(flow) as environment:

@@ -23,6 +23,7 @@ use crate::support::{DexDevTestEnvironment, flow_id, skip_if_server_zd};
 #[test]
 #[ignore = "requires dexcli dev"]
 fn test_step_cancellation() {
+    // C21: server-zd rejects Step failure policies.
     let is_server_zd = skip_if_server_zd("Step failure policies");
     for scenario in CancellationScenario::ALL {
         if is_server_zd
