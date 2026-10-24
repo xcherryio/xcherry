@@ -25,11 +25,13 @@ pub struct LogReadAheadConfig {
     /// Replay throughput is about this many batches per object-store GET round trip, so 64 at a
     /// 10 ms GET latency allows about 6,400 batches per second. Must be positive.
     pub max_read_ahead_batches: usize,
-    /// Defaults to 64 MiB; no read starts while fetched batches waiting to be returned hold this
-    /// many record bytes.
+    /// Defaults to 64 MiB; record bytes that batches read ahead may hold.
     ///
-    /// Read-ahead memory stays below this budget plus `max_read_ahead_batches` times the largest
-    /// batch, whatever the length of the log. Must be positive.
+    /// A read starts only while the fetched batches waiting to be returned, plus the largest batch
+    /// seen so far for each read in flight, fit in this budget. Read-ahead memory therefore stays
+    /// near this budget while batch sizes are steady, and below this budget plus
+    /// `max_read_ahead_batches` times the largest batch in any case, whatever the length of the
+    /// log. Must be positive.
     pub max_buffered_bytes: usize,
 }
 
@@ -59,6 +61,8 @@ pub struct OrderedBatchReader<'a> {
     in_flight: FuturesUnordered<BoxFuture<'a, (u64, BatchRead)>>,
     fetched: BTreeMap<u64, BatchRead>,
     fetched_bytes: usize,
+    /// Record bytes of the largest batch fetched so far, charged to each read in flight.
+    largest_batch_bytes: usize,
 }
 
 /// One GET of a batch: the decoded batch and its record bytes, or `None` when the seq is empty.
@@ -88,6 +92,7 @@ impl<'a> OrderedBatchReader<'a> {
             in_flight: FuturesUnordered::new(),
             fetched: BTreeMap::new(),
             fetched_bytes: 0,
+            largest_batch_bytes: 0,
         }
     }
 
@@ -147,6 +152,7 @@ impl<'a> OrderedBatchReader<'a> {
     fn keep_fetched(&mut self, seq: u64, read: BatchRead) {
         if let Ok(Some((_, bytes))) = &read {
             self.fetched_bytes += bytes;
+            self.largest_batch_bytes = self.largest_batch_bytes.max(*bytes);
         }
         self.fetched.insert(seq, read);
     }
@@ -155,10 +161,13 @@ impl<'a> OrderedBatchReader<'a> {
     fn start_reads(&mut self) {
         while let Some(seq) = self.next_seq_to_read {
             let outstanding = self.in_flight.len() + self.fetched.len();
-            // One outstanding read is always allowed, so a zero budget still makes progress.
+            let projected_bytes = self.fetched_bytes.saturating_add(
+                (self.in_flight.len() + 1).saturating_mul(self.largest_batch_bytes),
+            );
+            // One outstanding read is always allowed, so a batch above the budget still loads.
             if outstanding > 0
                 && (outstanding >= self.config.max_read_ahead_batches
-                    || self.fetched_bytes >= self.config.max_buffered_bytes)
+                    || projected_bytes > self.config.max_buffered_bytes)
             {
                 return;
             }
