@@ -25,7 +25,7 @@ use tonic_health::pb::HealthCheckRequest;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 
-use super::workload::{VerificationReport, Workload, WorkloadWorker};
+use super::workload::{CompletedChain, VerificationReport, Workload, WorkloadWorker};
 use crate::harness;
 use crate::{NODE_ID, PRIMARY_BUCKET, PRIMARY_PREFIX};
 
@@ -391,14 +391,14 @@ impl SupervisedNode {
         workload: &Workload,
         count: u64,
     ) {
-        let target = workload.acknowledged_count() + count;
+        let target = workload.progress_target(count);
         loop {
             let incarnation = self
                 .incarnation
                 .as_mut()
                 .expect("a supervised node has an incarnation between calls");
             if workload
-                .wait_for_acknowledgements_or_exit(target, &mut incarnation.process)
+                .wait_for_progress_or_exit(&target, &mut incarnation.process)
                 .await
                 .is_ok()
             {
@@ -423,6 +423,21 @@ impl SupervisedNode {
         workload
             .verify(incarnation.channel.clone(), &mut incarnation.process)
             .await
+    }
+
+    /// Panics unless `chain` is still Completed on the current incarnation.
+    pub(crate) async fn verify_completed_chain(
+        &mut self,
+        workload: &Workload,
+        chain: &CompletedChain,
+    ) {
+        let incarnation = self
+            .incarnation
+            .as_mut()
+            .expect("a supervised node has an incarnation between calls");
+        workload
+            .verify_completed_chain(incarnation.channel.clone(), &mut incarnation.process, chain)
+            .await;
     }
 
     /// Sends SIGTERM and requires a clean exit.

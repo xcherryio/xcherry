@@ -116,9 +116,19 @@ async fn lost_local_directory_restores_from_snapshot_and_log_tail() {
     let mut process = fleet.spawn(&snapshotting_config, address, "snapshotting");
     let channel = process.wait_until_serving().await;
     let worker = workload.start_worker(channel.clone()).await;
-    workload.start_counters(channel, COUNTER_COUNT).await;
+    workload
+        .start_counters(channel.clone(), COUNTER_COUNT)
+        .await;
     let load = workload.start_load(address, "snapshotting", CHAIN_STARTERS, CALL_TIMEOUT);
-    wait_for_snapshots_and_log_cleanup(&inspector, &mut process).await;
+    workload
+        .wait_for_new_acknowledgements(ACKNOWLEDGEMENTS_PER_PHASE, &mut process)
+        .await;
+    // The log tail never rewrites a completed chain Flow, so only the snapshot can restore it.
+    let snapshotted_chain = workload
+        .wait_for_first_completed_chain(channel, &mut process)
+        .await;
+    let snapshotted_seq = inspector.newest_log_seq().await;
+    wait_for_snapshots_and_log_cleanup(&inspector, &mut process, snapshotted_seq).await;
     load.stop().await;
     let status = process.terminate(PROCESS_SHUTDOWN_BUDGET).await;
     assert_eq!(status.code(), Some(0), "{}", process.log());
@@ -163,6 +173,13 @@ async fn lost_local_directory_restores_from_snapshot_and_log_tail() {
         last_applied_seq > 0,
         "the restore must start from a snapshot:\n{restore_log}"
     );
+    assert!(
+        last_applied_seq >= snapshotted_seq,
+        "the restored snapshot must cover seq {snapshotted_seq}, after {} completed:\n{restore_log}",
+        snapshotted_chain.flow_id()
+    );
+    node.verify_completed_chain(&workload, &snapshotted_chain)
+        .await;
     // Repeated counter values would expose a write the restore lost.
     let load = workload.start_load(address, "restored", CHAIN_STARTERS, CALL_TIMEOUT);
     node.wait_for_new_acknowledgements(&mut fleet, &workload, ACKNOWLEDGEMENTS_PER_PHASE)
@@ -171,7 +188,8 @@ async fn lost_local_directory_restores_from_snapshot_and_log_tail() {
 
     let report = node.verify(&workload).await;
     eprintln!(
-        "lost_local_directory_restores_from_snapshot_and_log_tail: restored at seq {last_applied_seq}; {} stale-batch restarts; {report}",
+        "lost_local_directory_restores_from_snapshot_and_log_tail: restored at seq {last_applied_seq}, covering {} completed by seq {snapshotted_seq}; {} stale-batch restarts; {report}",
+        snapshotted_chain.flow_id(),
         node.stale_batch_restart_count()
     );
     node.terminate().await;
@@ -324,16 +342,18 @@ fn unix_micros_now() -> i64 {
     i64::try_from(elapsed.as_micros()).expect("the wall clock fits in i64 microseconds")
 }
 
-/// Polls until two snapshots exist and log cleanup has deleted the first log batch.
+/// Polls until two snapshots exist, the newest applied `seq`, and log cleanup has deleted the first log batch.
 async fn wait_for_snapshots_and_log_cleanup(
     inspector: &ObjectStoreInspector,
     process: &mut RobustnessProcess,
+    seq: u64,
 ) {
     let deadline = Instant::now() + SNAPSHOT_BUDGET;
     loop {
         let manifest_keys = inspector.snapshot_manifest_keys().await;
         let has_first_batch = inspector.has_object(&first_log_batch_key()).await;
-        if manifest_keys.len() >= 2 && !has_first_batch {
+        let applied_seq = inspector.newest_snapshot_applied_seq().await;
+        if manifest_keys.len() >= 2 && !has_first_batch && applied_seq >= seq {
             return;
         }
         if let Some(status) = process.exit_status() {
@@ -341,7 +361,7 @@ async fn wait_for_snapshots_and_log_cleanup(
         }
         assert!(
             Instant::now() < deadline,
-            "within {SNAPSHOT_BUDGET:?} expected 2 snapshot manifests and no first log batch, got {manifest_keys:?} and first batch present {has_first_batch}:\n{}",
+            "within {SNAPSHOT_BUDGET:?} expected 2 snapshot manifests, the newest applying seq {seq}, and no first log batch, got {manifest_keys:?} applying seq {applied_seq} and first batch present {has_first_batch}:\n{}",
             process.log()
         );
         tokio::time::sleep(OBJECT_POLL_INTERVAL).await;

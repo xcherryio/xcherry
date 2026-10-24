@@ -44,6 +44,8 @@ const COUNTER_FLOW_TYPE: &str = "RobustnessCounterFlow";
 const CHAIN_STEP_TYPE: &str = "ChainStep";
 const COUNTER_START_STEP_TYPE: &str = "CounterStartStep";
 const INCREMENT_COUNTER_RPC: &str = "IncrementCounter";
+const FINISH_COUNTER_RPC: &str = "FinishCounter";
+const FINISH_COUNTER_STEP_TYPE: &str = "FinishCounterStep";
 const COUNTER_ATTRIBUTE: &str = "counter-value";
 /// A chain Flow runs ChainStep for indexes 0 through this one, then completes with it.
 const LAST_CHAIN_INDEX: i64 = 9;
@@ -101,6 +103,15 @@ struct AcknowledgedStart {
     flow_id: String,
     run_id: String,
     kind: WorkloadFlowKind,
+}
+
+/// An acknowledged chain Flow that a test saw complete.
+pub(crate) struct CompletedChain(AcknowledgedStart);
+
+impl CompletedChain {
+    pub(crate) fn flow_id(&self) -> &str {
+        &self.0.flow_id
+    }
 }
 
 /// The client view of one counter Flow.
@@ -199,6 +210,13 @@ impl ClientLedger {
     }
 }
 
+/// Ledger counts a load phase must reach, so a phase cannot pass on chain starts alone.
+#[derive(Debug)]
+pub(crate) struct ProgressTarget {
+    acknowledged_count: u64,
+    counter_increment_counts: BTreeMap<String, usize>,
+}
+
 /// Counts from a passing verification.
 #[derive(Debug)]
 pub(crate) struct VerificationReport {
@@ -214,7 +232,7 @@ impl fmt::Display for VerificationReport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{} chain Flows completed; {} counters with {} acknowledged and {} unknown increments; {} chain Step executions, {} re-executed",
+            "{} chain Flows completed; {} counters completed with {} acknowledged and {} unknown increments; {} chain Step executions, {} re-executed",
             self.chain_flows,
             self.counter_flows,
             self.acknowledged_increments,
@@ -344,16 +362,15 @@ impl Workload {
     }
 
     /// Waits for `count` more acknowledged calls; fails if `process` exits meanwhile.
+    ///
+    /// Every counter must also gain an acknowledged increment.
     pub(crate) async fn wait_for_new_acknowledgements(
         &self,
         count: u64,
         process: &mut RobustnessProcess,
     ) {
-        let target = self.acknowledged_count() + count;
-        if let Err(status) = self
-            .wait_for_acknowledgements_or_exit(target, process)
-            .await
-        {
+        let target = self.progress_target(count);
+        if let Err(status) = self.wait_for_progress_or_exit(&target, process).await {
             panic!(
                 "dex-server-zd exited with {status} under load:\n{}",
                 process.log()
@@ -361,25 +378,53 @@ impl Workload {
         }
     }
 
-    /// Waits until `target` calls are acknowledged, or returns the exit status if `process` exits.
-    pub(crate) async fn wait_for_acknowledgements_or_exit(
+    /// Returns a target of `count` more acknowledged calls and one more increment per counter.
+    pub(crate) fn progress_target(&self, count: u64) -> ProgressTarget {
+        ProgressTarget {
+            acknowledged_count: self.acknowledged_count() + count,
+            counter_increment_counts: self
+                .ledger
+                .counters()
+                .into_iter()
+                .map(|(flow_id, counter)| (flow_id, counter.acknowledged_values.len() + 1))
+                .collect(),
+        }
+    }
+
+    /// Waits until the load reaches `target`, or returns the exit status if `process` exits.
+    pub(crate) async fn wait_for_progress_or_exit(
         &self,
-        target: u64,
+        target: &ProgressTarget,
         process: &mut RobustnessProcess,
     ) -> Result<(), ExitStatus> {
         let deadline = Instant::now() + PROGRESS_BUDGET;
-        while self.acknowledged_count() < target {
+        while !self.has_reached(target) {
             if let Some(status) = process.exit_status() {
                 return Err(status);
             }
             assert!(
                 Instant::now() < deadline,
-                "the load did not reach {target} acknowledged calls within {PROGRESS_BUDGET:?}:\n{}",
+                "the load did not reach {target:?} within {PROGRESS_BUDGET:?}:\n{}",
                 summarize(&self.ledger, &self.journal)
             );
             tokio::time::sleep(PROGRESS_POLL_INTERVAL).await;
         }
         Ok(())
+    }
+
+    fn has_reached(&self, target: &ProgressTarget) -> bool {
+        if self.acknowledged_count() < target.acknowledged_count {
+            return false;
+        }
+        let counters = self.ledger.counters();
+        target
+            .counter_increment_counts
+            .iter()
+            .all(|(flow_id, increment_count)| {
+                counters
+                    .get(flow_id)
+                    .is_some_and(|counter| counter.acknowledged_values.len() >= *increment_count)
+            })
     }
 
     /// Panics unless every acknowledged write is on the server behind `channel` and matches the journal.
@@ -398,12 +443,20 @@ impl Workload {
         for start in &starts {
             match start.kind {
                 WorkloadFlowKind::Chain => {
-                    self.verify_chain_completed(&mut client, server, start, deadline)
-                        .await;
+                    self.wait_for_completion(
+                        &mut client,
+                        server,
+                        start,
+                        LAST_CHAIN_INDEX,
+                        deadline,
+                    )
+                    .await;
                     chain_flows += 1;
                 }
                 WorkloadFlowKind::Counter => {
-                    let final_value = self.read_counter(&mut client, server, start).await;
+                    let final_value = self
+                        .finish_counter(&mut client, server, start, deadline)
+                        .await;
                     final_counter_values.insert(start.flow_id.clone(), final_value);
                 }
             }
@@ -422,11 +475,90 @@ impl Workload {
         }
     }
 
-    async fn verify_chain_completed(
+    /// Waits until the first acknowledged chain Flow completes on `server` and returns it.
+    pub(crate) async fn wait_for_first_completed_chain(
+        &self,
+        channel: Channel,
+        server: &mut RobustnessProcess,
+    ) -> CompletedChain {
+        let start = self
+            .ledger
+            .starts()
+            .into_iter()
+            .find(|start| start.kind == WorkloadFlowKind::Chain)
+            .expect("the load acknowledged a chain start");
+        self.verify_completed_chain(channel, server, &CompletedChain(start.clone()))
+            .await;
+        CompletedChain(start)
+    }
+
+    /// Panics unless `chain` is Completed with its last index on its acknowledged run.
+    pub(crate) async fn verify_completed_chain(
+        &self,
+        channel: Channel,
+        server: &mut RobustnessProcess,
+        chain: &CompletedChain,
+    ) {
+        let mut client = FlowServiceClient::new(channel);
+        let deadline = Instant::now() + VERIFICATION_BUDGET;
+        self.wait_for_completion(&mut client, server, &chain.0, LAST_CHAIN_INDEX, deadline)
+            .await;
+    }
+
+    /// Completes a counter Flow with its locked value through FinishCounter and returns that value.
+    async fn finish_counter(
         &self,
         client: &mut FlowServiceClient<Channel>,
         server: &mut RobustnessProcess,
         start: &AcknowledgedStart,
+        deadline: Instant,
+    ) -> i64 {
+        // The reused request ID replays the reply of an attempt whose response was lost.
+        let request_id = self
+            .ledger
+            .new_request_id(&format!("{}-finish", start.flow_id));
+        let final_value = loop {
+            assert_still_serving(server);
+            let call = client.invoke_rpc(InvokeRpcRequest {
+                flow_id: start.flow_id.clone(),
+                run_id: start.run_id.clone(),
+                rpc_name: FINISH_COUNTER_RPC.to_owned(),
+                timeout_seconds: RPC_TIMEOUT_SECONDS,
+                lock_attribute_keys: vec![COUNTER_ATTRIBUTE.to_owned()],
+                request_id: request_id.clone(),
+                ..InvokeRpcRequest::default()
+            });
+            let failure = match tokio::time::timeout(VERIFICATION_CALL_TIMEOUT, call).await {
+                Ok(Ok(response)) => break integer_of(response.into_inner().output.as_ref()),
+                Ok(Err(status)) => status.to_string(),
+                Err(_) => format!("no reply within {VERIFICATION_CALL_TIMEOUT:?}"),
+            };
+            assert!(
+                Instant::now() < deadline,
+                "FinishCounter for acknowledged {} run {} failed until {VERIFICATION_BUDGET:?} passed: {failure}",
+                start.flow_id,
+                start.run_id
+            );
+            tokio::time::sleep(RETRY_PAUSE).await;
+        };
+        self.wait_for_completion(client, server, start, final_value, deadline)
+            .await;
+        let stored_value = self.read_counter(client, server, start).await;
+        assert_eq!(
+            stored_value, final_value,
+            "{} completed with {final_value} but stores {stored_value}",
+            start.flow_id
+        );
+        final_value
+    }
+
+    /// Panics unless the acknowledged run completes with `expected_output` before `deadline`.
+    async fn wait_for_completion(
+        &self,
+        client: &mut FlowServiceClient<Channel>,
+        server: &mut RobustnessProcess,
+        start: &AcknowledgedStart,
+        expected_output: i64,
         deadline: Instant,
     ) {
         loop {
@@ -454,8 +586,8 @@ impl Workload {
                                 .results
                                 .iter()
                                 .any(|output| output.completed_step_output
-                                    == Some(int_value(LAST_CHAIN_INDEX))),
-                            "{} completed without output {LAST_CHAIN_INDEX}: {result:?}",
+                                    == Some(int_value(expected_output))),
+                            "{} completed without output {expected_output}: {result:?}",
                             start.flow_id
                         );
                         return;
@@ -611,6 +743,10 @@ impl Workload {
                 })
                 .collect();
             let acknowledged: BTreeSet<i64> = counter.acknowledged_values.iter().copied().collect();
+            assert!(
+                !acknowledged.is_empty(),
+                "{flow_id} has no acknowledged increment"
+            );
             assert_eq!(
                 acknowledged.len(),
                 counter.acknowledged_values.len(),
@@ -921,7 +1057,11 @@ fn task_reply(task: PollWorkerTask, journal: &WorkerJournal) -> PollWorkerTaskRe
             })
         }
         poll_worker_task::Request::Rpc(request) => {
-            poll_worker_task_frame::Output::Rpc(increment_counter(&request, journal))
+            poll_worker_task_frame::Output::Rpc(match request.rpc_name.as_str() {
+                INCREMENT_COUNTER_RPC => increment_counter(&request, journal),
+                FINISH_COUNTER_RPC => schedule_counter_finish(&request),
+                other => panic!("unexpected RPC {other}"),
+            })
         }
     };
     PollWorkerTaskRequest {
@@ -972,6 +1112,10 @@ fn execute(
             }
         }
         COUNTER_START_STEP_TYPE => close_decision(CloseDecisionType::DeadEnd, None),
+        FINISH_COUNTER_STEP_TYPE => close_decision(
+            CloseDecisionType::GracefulComplete,
+            Some(int_value(integer_of(request.step_input.as_ref()))),
+        ),
         other => panic!("unexpected Step type {other}"),
     };
     InvokeExecuteMethodResponse {
@@ -990,11 +1134,7 @@ fn increment_counter(
         .context
         .as_ref()
         .expect("an RPC request carries its context");
-    let current = request
-        .attributes
-        .iter()
-        .find(|attribute| attribute.key == COUNTER_ATTRIBUTE)
-        .map_or(0, |attribute| integer_of(attribute.value.as_ref()));
+    let current = locked_counter_value(request);
     let next = current + 1;
     journal
         .counter_increments
@@ -1014,6 +1154,33 @@ fn increment_counter(
         }],
         ..InvokeWorkerRpcResponse::default()
     }
+}
+
+/// Returns the locked counter and starts FinishCounterStep, which completes the Flow with it.
+fn schedule_counter_finish(request: &InvokeWorkerRpcRequest) -> InvokeWorkerRpcResponse {
+    let value = locked_counter_value(request);
+    InvokeWorkerRpcResponse {
+        output: Some(int_value(value)),
+        step_decision: Some(StepDecision {
+            next_steps: vec![StepMovement {
+                step_type: FINISH_COUNTER_STEP_TYPE.to_owned(),
+                step_input: Some(int_value(value)),
+                step_options: Some(skipped_wait_for()),
+                ..StepMovement::default()
+            }],
+            ..StepDecision::default()
+        }),
+        ..InvokeWorkerRpcResponse::default()
+    }
+}
+
+/// Returns the counter value an RPC request loaded, or 0 before the first increment.
+fn locked_counter_value(request: &InvokeWorkerRpcRequest) -> i64 {
+    request
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == COUNTER_ATTRIBUTE)
+        .map_or(0, |attribute| integer_of(attribute.value.as_ref()))
 }
 
 fn close_decision(

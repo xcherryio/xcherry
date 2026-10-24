@@ -9,7 +9,7 @@
 //! Reads a node's objects through the S3 API to check log, snapshot, and lease state.
 
 use dexzd_object_store::{ObjectStore, S3Credentials, S3ObjectStore, S3ObjectStoreConfig};
-use dexzd_protocol::dexzd::v1::{LogBatchHeader, NodeLease};
+use dexzd_protocol::dexzd::v1::{LogBatchHeader, NodeLease, SnapshotManifest};
 use prost::Message;
 
 use crate::harness;
@@ -93,6 +93,43 @@ impl ObjectStoreInspector {
             headers.push(decode_log_batch_header(&key, &content.bytes));
         }
         headers
+    }
+
+    /// Returns the seq of the newest log batch object, or 0 if there is none.
+    pub(crate) async fn newest_log_seq(&self) -> u64 {
+        self.keys_under(&format!("log/{NODE_ID}/"))
+            .await
+            .last()
+            .map_or(0, |key| {
+                key.rsplit('/')
+                    .next()
+                    .and_then(|seq| seq.parse().ok())
+                    .unwrap_or_else(|| panic!("{key} does not end with a log seq"))
+            })
+    }
+
+    /// Returns the lowest partition seq that the newest snapshot applied, or 0 without one.
+    pub(crate) async fn newest_snapshot_applied_seq(&self) -> u64 {
+        let Some(key) = self.snapshot_manifest_keys().await.pop() else {
+            return 0;
+        };
+        let Some(content) = self
+            .store
+            .get(&key)
+            .await
+            .expect("the inspection store reads a snapshot manifest")
+        else {
+            // Retention may delete a listed manifest before this read.
+            return 0;
+        };
+        let manifest = SnapshotManifest::decode(content.bytes)
+            .unwrap_or_else(|error| panic!("{key} is not a SnapshotManifest: {error}"));
+        manifest
+            .partition_positions
+            .iter()
+            .map(|position| position.applied.as_ref().map_or(0, |applied| applied.seq))
+            .min()
+            .unwrap_or(0)
     }
 
     pub(crate) async fn node_lease(&self) -> NodeLease {
