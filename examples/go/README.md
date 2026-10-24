@@ -72,6 +72,9 @@ The defaults connect to Dex at `localhost:8801`. These environment variables ove
 - `DEX_WORKER_TARGET`: address advertised to Dex when it differs from the bind address.
 - `DEX_EXAMPLES_HTTP_ADDRESS`: HTTP controller bind address.
 - `DEX_BLOB_CACHE_DIR`: shared Client/Worker blob-cache directory.
+- `DEX_EXAMPLES_WORKER_MODE`: `push` (default) listens on the Worker bind
+  address. `pull` connects to Dex as a pull Worker, ignores the bind address and
+  target, and starts Flows with the pull Worker target.
 
 When Dex runs in Docker, set `DEX_WORKER_TARGET=host.docker.internal:8803`.
 
@@ -123,6 +126,12 @@ Web running after tests for manual exploration:
 ```bash
 ./run-e2e-tests.sh --keep-running
 ```
+
+Set `DEX_EXAMPLES_WORKER_MODE=pull` to run the same tests with pull Workers.
+Set `DEX_INTEG_ENGINE=zd` to run them against server-zd. That mode defaults to
+pull Workers, does not start the entity store, and skips samples that use
+failure policies, start delay, Flow retry, or Attribute Store sync. Set
+`DEX_SERVER_ZD_BINARY` to reuse a built `dex-server-zd`.
 
 `make e2eTests` also runs Deal DSL against its own binary-equivalent Worker
 and PostgreSQL. That Postgres is started only for those tests.

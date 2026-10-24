@@ -46,7 +46,8 @@ func flowSmokeCatalog() []flowSmokeEntry {
 			},
 		},
 		{
-			name: "products/money-transfer",
+			name:                       "products/money-transfer",
+			serverZDUnsupportedFeature: "failure policies",
 			trigger: func(t *testing.T) (string, string) {
 				query := url.Values{
 					"amount":      {"100"},
@@ -65,7 +66,8 @@ func flowSmokeCatalog() []flowSmokeEntry {
 			},
 		},
 		{
-			name: "products/order-processing",
+			name:                       "products/order-processing",
+			serverZDUnsupportedFeature: "failure policies",
 			trigger: func(t *testing.T) (string, string) {
 				flowID, runID := triggerFlowSmokeHTTP(t, http.MethodGet, "/products/order-processing/start", nil, nil)
 				return flowID, runID
@@ -121,7 +123,8 @@ func flowSmokeCatalog() []flowSmokeEntry {
 			flags: flowSmokeFlags{noStartStep: true},
 		},
 		{
-			name: "patterns/polling",
+			name:                       "patterns/polling",
+			serverZDUnsupportedFeature: "failure policies",
 			trigger: func(t *testing.T) (string, string) {
 				query := url.Values{"workflowId": {smokeWorkflowID(t, "pattern-polling")}}
 				return triggerFlowSmokeHTTP(
@@ -161,7 +164,8 @@ func flowSmokeCatalog() []flowSmokeEntry {
 			},
 		},
 		{
-			name: "patterns/entity-store",
+			name:                       "patterns/entity-store",
+			serverZDUnsupportedFeature: "Attribute Store sync",
 			trigger: func(t *testing.T) (string, string) {
 				userID := smokeWorkflowID(t, "entity-store")
 				body := entitystore.UserProfileRequest{
@@ -220,7 +224,8 @@ func flowSmokeCatalog() []flowSmokeEntry {
 			flags: flowSmokeFlags{noStartStep: true},
 		},
 		{
-			name: "patterns/manual-recovery",
+			name:                       "patterns/manual-recovery",
+			serverZDUnsupportedFeature: "failure policies",
 			trigger: func(t *testing.T) (string, string) {
 				query := url.Values{"workflowId": {smokeWorkflowID(t, "manual-recovery")}}
 				return triggerFlowSmokeHTTP(
@@ -274,7 +279,8 @@ func flowSmokeCatalog() []flowSmokeEntry {
 		parallelSmokeEntry("await"),
 		parallelSmokeEntry("first-win"),
 		{
-			name: "patterns/recovery",
+			name:                       "patterns/recovery",
+			serverZDUnsupportedFeature: "failure policies",
 			trigger: func(t *testing.T) (string, string) {
 				query := url.Values{
 					"workflowId": {smokeWorkflowID(t, "recovery")},
@@ -389,7 +395,8 @@ func flowSmokeCatalog() []flowSmokeEntry {
 			},
 		},
 		{
-			name: "primitives/step/options-override",
+			name:                       "primitives/step/options-override",
+			serverZDUnsupportedFeature: "failure policies",
 			trigger: func(t *testing.T) (string, string) {
 				query := url.Values{
 					"workflowId": {smokeWorkflowID(t, "primitive-step-options-override")},
@@ -533,6 +540,9 @@ func TestFlowSmokeAllRegisteredFlowsViaController(t *testing.T) {
 	for _, entry := range flowSmokeCatalog() {
 		entry := entry
 		t.Run(entry.name, func(t *testing.T) {
+			if entry.serverZDUnsupportedFeature != "" {
+				skipWhenServerZD(t, entry.serverZDUnsupportedFeature)
+			}
 			flowID, runID := entry.trigger(t)
 			requireFlowSmokeIDs(t, entry.name, flowID)
 			assertFlowSmokeStartStep(t, entry, flowID, runID)

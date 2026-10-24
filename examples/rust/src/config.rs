@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use dex_examples_rust::shared::{
+    UnknownWorkerModeError, WORKER_MODE_ENVIRONMENT_VARIABLE, WorkerMode,
+};
+
 pub(crate) struct ExamplesConfig {
     pub(crate) server_address: String,
     pub(crate) worker_bind_address: String,
     pub(crate) http_address: String,
     pub(crate) cache_directory: String,
+    pub(crate) worker_mode: WorkerMode,
 }
 
 impl ExamplesConfig {
-    pub(crate) fn from_environment() -> Self {
+    pub(crate) fn from_environment() -> Result<Self, UnknownWorkerModeError> {
         let server_address =
             std::env::var("DEX_SERVER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8801".to_string());
         let worker_bind_address = std::env::var("DEX_WORKER_BIND_ADDRESS")
@@ -29,12 +34,16 @@ impl ExamplesConfig {
             .unwrap_or_else(|_| "127.0.0.1:8080".to_string());
         let cache_directory = std::env::var("DEX_BLOB_CACHE_DIR")
             .unwrap_or_else(|_| "/tmp/dex-rust-examples-blobs".to_string());
+        let worker_mode_value = std::env::var_os(WORKER_MODE_ENVIRONMENT_VARIABLE)
+            .map(|value| value.to_string_lossy().into_owned());
+        let worker_mode = WorkerMode::parse(worker_mode_value.as_deref())?;
 
-        Self {
+        Ok(Self {
             server_address,
             worker_bind_address,
             http_address,
             cache_directory,
-        }
+            worker_mode,
+        })
     }
 }

@@ -29,6 +29,28 @@ for arg in "$@"; do
   esac
 done
 
+export DEX_INTEG_ENGINE="${DEX_INTEG_ENGINE:-temporal}"
+if [[ "$DEX_INTEG_ENGINE" != temporal && "$DEX_INTEG_ENGINE" != zd ]]; then
+  echo "DEX_INTEG_ENGINE must be temporal or zd" >&2
+  exit 2
+fi
+default_worker_mode=push
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  default_worker_mode=pull
+fi
+export DEX_EXAMPLES_WORKER_MODE="${DEX_EXAMPLES_WORKER_MODE:-$default_worker_mode}"
+if [[ "$DEX_EXAMPLES_WORKER_MODE" != push && "$DEX_EXAMPLES_WORKER_MODE" != pull ]]; then
+  echo "DEX_EXAMPLES_WORKER_MODE must be push or pull" >&2
+  exit 2
+fi
+if [[ "$DEX_INTEG_ENGINE" == zd && "$DEX_EXAMPLES_WORKER_MODE" == push ]]; then
+  echo "DEX_EXAMPLES_WORKER_MODE=push is not supported with DEX_INTEG_ENGINE=zd" >&2
+  exit 2
+fi
+if [[ -n "${DEX_SERVER_ZD_BINARY:-}" && "$DEX_SERVER_ZD_BINARY" == */* ]]; then
+  DEX_SERVER_ZD_BINARY="$(cd "$(dirname "$DEX_SERVER_ZD_BINARY")" && pwd)/$(basename "$DEX_SERVER_ZD_BINARY")"
+fi
+
 dex_port="${DEX_EXAMPLES_DEX_PORT:-19811}"
 web_port="${DEX_EXAMPLES_WEB_PORT:-19911}"
 dex_address="127.0.0.1:${dex_port}"
@@ -71,16 +93,31 @@ trap cleanup EXIT
   GOWORK=off go build -trimpath -o "$binary_dir/dexcli" ./cmd/dexcli
 )
 : >"$log_file"
-docker compose -p "$compose_project" \
-  -f "$entity_store_dir/docker-compose.yml" up --detach --wait
-entity_store_started=true
+# server-zd does not support Attribute Store sync, so zd runs skip the entity store.
+if [[ "$DEX_INTEG_ENGINE" == temporal ]]; then
+  docker compose -p "$compose_project" \
+    -f "$entity_store_dir/docker-compose.yml" up --detach --wait
+  entity_store_started=true
+fi
+if [[ "$DEX_INTEG_ENGINE" == zd && -z "${DEX_SERVER_ZD_BINARY:-}" ]]; then
+  (cd "$repo_root" && cargo build --release --locked --manifest-path server-zd/Cargo.toml -p dexzd-server --bin dex-server-zd)
+  DEX_SERVER_ZD_BINARY="$repo_root/server-zd/target/release/dex-server-zd"
+fi
+if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
+  dev_args=(-engine zd -zd-binary "$DEX_SERVER_ZD_BINARY" -zd-data-dir "$test_dir/zd")
+else
+  dev_args=(
+    -attribute-store-config "$entity_store_dir/attribute-store.yaml"
+    -sqlite-db-filename "$test_dir/temporal.db"
+  )
+fi
+
 "$binary_dir/dexcli" dev \
-  -attribute-store-config "$entity_store_dir/attribute-store.yaml" \
+  "${dev_args[@]}" \
   -bind-address 127.0.0.1 \
   -dex-port "$dex_port" \
   -web-port "$web_port" \
   -open=false \
-  -sqlite-db-filename "$test_dir/temporal.db" \
   >>"$log_file" 2>&1 &
 dexcli_pid=$!
 
@@ -104,12 +141,23 @@ fi
 cd "$script_dir"
 uv sync --locked
 export DEXCLI_PATH="$binary_dir/dexcli"
-if ((${#test_args[@]})); then
-  DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
-    uv run --frozen pytest tests/unit tests/integ sync-python/sync_tests/integ -v "${test_args[@]}" 2>&1 | tee "$test_log"
+run_pytest() {
+  if ((${#test_args[@]})); then
+    DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
+      uv run --frozen pytest "$@" -v "${test_args[@]}"
+  else
+    DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
+      uv run --frozen pytest "$@" -v
+  fi
+}
+if [[ "$DEX_EXAMPLES_WORKER_MODE" == pull ]]; then
+  # Pull tasks for shared Flow types can reach the async Worker, idle during sync tests.
+  {
+    run_pytest tests/unit tests/integ &&
+      run_pytest sync-python/sync_tests/integ
+  } 2>&1 | tee "$test_log"
 else
-  DEX_FLOW_SERVICE_ADDRESS="$dex_address" \
-    uv run --frozen pytest tests/unit tests/integ sync-python/sync_tests/integ -v 2>&1 | tee "$test_log"
+  run_pytest tests/unit tests/integ sync-python/sync_tests/integ 2>&1 | tee "$test_log"
 fi
 
 if $keep_running; then

@@ -27,7 +27,7 @@ from dex_examples.app import ExampleApp
 from dex_examples.http_app import create_app
 from dex_examples.products.ai_agent.ai_agent_flow import STATUS_WAITING_TIMER
 from dex_examples.products.ai_agent.models import HistoryRequest
-from tests.integ.conftest import WAIT_TIMEOUT, wait_until
+from tests.integ.conftest import WAIT_TIMEOUT, skip_when_server_zd, wait_until
 from tests.integ.flow_smoke_helper import (
     FlowSmokeEntry,
     FlowSmokeFlags,
@@ -94,10 +94,12 @@ def flow_smoke_catalog(client: FlowSmokeHttpClient) -> list[FlowSmokeEntry]:
                     "notes": "smoke",
                 },
             ),
+            server_zd_unsupported_feature="failure policies",
         ),
         FlowSmokeEntry(
             "products/order-processing",
             lambda c: trigger_get("/products/order-processing/start", {}),
+            server_zd_unsupported_feature="failure policies",
         ),
         FlowSmokeEntry(
             "products/subscription",
@@ -128,6 +130,7 @@ def flow_smoke_catalog(client: FlowSmokeHttpClient) -> list[FlowSmokeEntry]:
                 "/patterns/polling/start",
                 {"workflowId": new_id("pattern-polling")},
             ),
+            server_zd_unsupported_feature="failure policies",
         ),
         FlowSmokeEntry(
             "patterns/interruptible",
@@ -144,6 +147,7 @@ def flow_smoke_catalog(client: FlowSmokeHttpClient) -> list[FlowSmokeEntry]:
             "patterns/entity-store",
             lambda c: _entity_store_trigger(c, new_id),
             flags=FlowSmokeFlags(no_start_step=True),
+            server_zd_unsupported_feature="Attribute Store sync",
         ),
         FlowSmokeEntry(
             "patterns/sequentially-chunked-attribute-map",
@@ -167,6 +171,7 @@ def flow_smoke_catalog(client: FlowSmokeHttpClient) -> list[FlowSmokeEntry]:
                 "/patterns/manual-recovery/start",
                 {"workflowId": new_id("manual-recovery")},
             ),
+            server_zd_unsupported_feature="failure policies",
         ),
         FlowSmokeEntry(
             "patterns/inactiveness-tracker-timer",
@@ -214,6 +219,7 @@ def flow_smoke_catalog(client: FlowSmokeHttpClient) -> list[FlowSmokeEntry]:
                 },
             ),
             flags=FlowSmokeFlags(step_start_may_fail=True),
+            server_zd_unsupported_feature="failure policies",
         ),
         parallel_subflows_entry("basic"),
         parallel_subflows_entry("wait-for-half"),
@@ -316,6 +322,7 @@ def flow_smoke_catalog(client: FlowSmokeHttpClient) -> list[FlowSmokeEntry]:
             flags=FlowSmokeFlags(
                 allowed_failure_event_types=frozenset({"StepWaitForFailed"})
             ),
+            server_zd_unsupported_feature="failure policies",
         ),
         FlowSmokeEntry(
             "primitives/step/step-decision",
@@ -600,17 +607,27 @@ async def _wait_for_http(base_url: str) -> None:
     raise RuntimeError("flow smoke HTTP server did not become ready")
 
 
+# Triggers are lazy, so a placeholder client only lists the entry names.
+FLOW_SMOKE_ENTRY_NAMES = [
+    entry.name for entry in flow_smoke_catalog(FlowSmokeHttpClient("", _new_flow_id))
+]
+
+
 @pytest.mark.integ
+@pytest.mark.parametrize("entry_name", FLOW_SMOKE_ENTRY_NAMES)
 async def test_flow_smoke_all_registered_flows_via_controller(
     flow_smoke_http: FlowSmokeHttpClient,
+    entry_name: str,
 ) -> None:
     catalog = flow_smoke_catalog(flow_smoke_http)
     assert catalog, "flow smoke catalog is empty"
-    for entry in catalog:
-        flow_id, run_id = await entry.trigger(flow_smoke_http)
-        assert flow_id, f"{entry.name}: controller response did not include flowID"
-        await assert_flow_smoke_start_step(entry, flow_id, run_id)
-        await assert_flow_smoke_no_unexpected_failures(entry, flow_id, run_id)
+    entry = next(entry for entry in catalog if entry.name == entry_name)
+    if entry.server_zd_unsupported_feature:
+        skip_when_server_zd(entry.server_zd_unsupported_feature)
+    flow_id, run_id = await entry.trigger(flow_smoke_http)
+    assert flow_id, f"{entry.name}: controller response did not include flowID"
+    await assert_flow_smoke_start_step(entry, flow_id, run_id)
+    await assert_flow_smoke_no_unexpected_failures(entry, flow_id, run_id)
 
 
 @pytest.mark.integ

@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class MoneyTransferIntegTest {
     @Test
     void moneyTransferStart() {
+        ServerZDSkips.skipWhenServerZD("failure policies");
         final IntegEnvironment environment = SharedIntegExtension.environment();
         final String flowId = environment.newFlowId("money-transfer");
         final TransferRequest input = new TransferRequest(
