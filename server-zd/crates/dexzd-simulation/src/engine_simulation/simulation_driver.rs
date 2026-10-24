@@ -15,7 +15,9 @@ use std::time::Duration;
 use dexzd_api::FlowOperations;
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::MetadataError;
-use dexzd_engine::{EngineLocalStore, EngineStartError, SeededEngineIdSourceForTest};
+use dexzd_engine::{
+    EngineLocalStore, EngineStartError, NodeStopReason, SeededEngineIdSourceForTest,
+};
 use dexzd_keyspace::TenantId;
 use dexzd_object_store::{
     FaultAction, FaultInjector, InMemoryObjectStore, ObjectStore, ObjectStoreOperation,
@@ -42,7 +44,7 @@ use crate::engine_simulation::simulated_node::{
     ClusterEnvironment, LEASE_TAKEOVER_GRACE, LocalStoreStart, NodeProcess, ProcessStart,
     copy_local_store,
 };
-use crate::engine_simulation::simulated_object_store::StorageObservations;
+use crate::engine_simulation::simulated_object_store::{SharedObjectStorage, StorageObservations};
 use crate::engine_simulation::simulated_workers::SimulatedWorkers;
 use crate::engine_simulation::workload::{OPERATION_MARKER_PREFIX, start_flow_request};
 use crate::engine_simulation::{
@@ -70,6 +72,8 @@ const START_CRASH_PROBABILITY: f64 = 0.15;
 const DRAIN_GRACE: Duration = Duration::from_secs(60);
 /// Object storage fault probabilities a seed draws from; some seeds run without faults.
 const FAULT_PROBABILITIES: [f64; 5] = [0.0, 0.001, 0.005, 0.01, 0.02];
+/// Longest wait of a crash for pipelined log writes to crash during.
+const PIPELINED_WRITE_WAIT: Duration = Duration::from_secs(3);
 /// Starts see fewer faults: one transient read error fails a start, and the log grows.
 const START_FAULT_DIVISOR: f64 = 4.0;
 
@@ -128,6 +132,7 @@ pub(crate) async fn run_simulation(
     for task in simulation.crashed_process_tasks.drain(..) {
         task.abort();
     }
+    simulation.environment.storage.abort_in_flight_writes();
     match outcome {
         Ok(()) => {
             let final_state = simulation.final_state().await;
@@ -172,14 +177,17 @@ impl Simulation {
             seed,
             config,
             environment: ClusterEnvironment {
-                shared_store,
-                workers,
-                committed_log: Arc::new(CommittedLog::new(
+                storage: Arc::new(SharedObjectStorage::new(
+                    shared_store,
                     Arc::clone(&trace),
                     Arc::clone(&storage_observations),
                 )),
+                workers,
+                committed_log: Arc::new(CommittedLog::new(
+                    Arc::clone(&trace),
+                    storage_observations,
+                )),
                 trace,
-                storage_observations,
                 id_source: Arc::new(SeededEngineIdSourceForTest::new(seed, id_clock)),
                 retention_after_close,
                 origin,
@@ -277,10 +285,25 @@ impl Simulation {
                     self.take_over_with_overlap().await?;
                 } else {
                     let kind = self.draw_restart_kind();
+                    if self.rng.random_bool(0.5) {
+                        self.wait_for_pipelined_log_writes().await;
+                    }
                     self.crash_and_restart(kind).await?;
                 }
                 next_crash = self.later(8_000..30_000);
             }
+        }
+    }
+
+    /// Waits briefly until the serving process has two log writes in flight, so the crash leaves
+    /// a later batch that may land after the successor's EpochStart.
+    async fn wait_for_pipelined_log_writes(&self) {
+        let Some(serving) = &self.serving else {
+            return;
+        };
+        let deadline = Instant::now() + PIPELINED_WRITE_WAIT;
+        while serving.object_store.unlanded_log_writes() < 2 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
 
@@ -426,8 +449,8 @@ impl Simulation {
         let mut still_running = Vec::new();
         for (process, deadline) in std::mem::take(&mut self.old_epoch_processes) {
             if process.stop_reason().is_some() || now >= deadline {
-                if process.stop_reason().is_some() {
-                    self.summary.self_stopped_processes += 1;
+                if let Some(reason) = process.stop_reason() {
+                    self.record_self_stop(Some(&reason));
                 }
                 self.crash(process);
             } else {
@@ -440,19 +463,27 @@ impl Simulation {
             .as_ref()
             .is_some_and(|serving| serving.stop_reason().is_some() || serving.is_registry_halted());
         if has_stopped {
-            let reason = self
-                .serving
+            let reason = self.serving.as_ref().and_then(NodeProcess::stop_reason);
+            let description = reason
                 .as_ref()
-                .and_then(NodeProcess::stop_reason)
-                .map_or_else(|| "registry halted".to_owned(), |reason| reason.to_string());
+                .map_or_else(|| "registry halted".to_owned(), ToString::to_string);
             self.trace(&format!(
-                "{} stopped by itself: {reason}",
+                "{} stopped by itself: {description}",
                 self.serving_label()
             ));
-            self.summary.self_stopped_processes += 1;
+            self.record_self_stop(reason.as_ref());
             self.crash_and_restart(RestartKind::Kept).await?;
         }
         Ok(())
+    }
+
+    fn record_self_stop(&mut self, reason: Option<&NodeStopReason>) {
+        self.summary.self_stopped_processes += 1;
+        *self
+            .summary
+            .self_stop_reasons
+            .entry(self_stop_kind(reason).to_owned())
+            .or_default() += 1;
     }
 
     fn draw_restart_kind(&mut self) -> RestartKind {
@@ -514,7 +545,8 @@ impl Simulation {
         ));
         self.store_copies.clear();
         self.environment
-            .storage_observations
+            .storage
+            .observations
             .lock()
             .expect("storage observation lock is not poisoned")
             .old_epoch
@@ -689,7 +721,7 @@ impl Simulation {
 
     /// Returns the trace, the serving process's local store, and every stored object.
     async fn final_state(&self) -> EngineSimulationFinalState {
-        let shared_store = &self.environment.shared_store;
+        let shared_store = &self.environment.storage.store;
         let mut objects = BTreeMap::new();
         let mut start_after = None;
         loop {
@@ -729,7 +761,8 @@ impl Simulation {
         summary.recent_events = environment.trace.recent_events();
         {
             let observations = environment
-                .storage_observations
+                .storage
+                .observations
                 .lock()
                 .expect("storage observation lock is not poisoned");
             summary.injected_faults = observations
@@ -745,6 +778,10 @@ impl Simulation {
             summary.old_epoch_overlaps = observations.old_epoch.overlaps;
             summary.old_epoch_frames = observations.old_epoch.frames;
             summary.old_epoch_write_attempts = name_counts(&observations.old_epoch.write_attempts);
+            summary.writes_landed_after_crash =
+                name_counts(&observations.writes_landed_after_crash);
+            summary.epoch_starts_below_landed_batches =
+                observations.epoch_starts_below_landed_batches;
         }
         summary.rejected_by_kind = name_counts(&environment.committed_log.rejected_by_kind());
         summary.worker_behaviors = environment
@@ -782,6 +819,24 @@ fn name_counts(counts: &BTreeMap<&'static str, u64>) -> BTreeMap<String, u64> {
         .iter()
         .map(|(name, count)| ((*name).to_owned(), *count))
         .collect()
+}
+
+/// Names why a process stopped; `None` means only its registry halted.
+fn self_stop_kind(reason: Option<&NodeStopReason>) -> &'static str {
+    match reason {
+        None => "registry-halted",
+        Some(NodeStopReason::Shutdown) => "shutdown",
+        Some(NodeStopReason::LeaseLost { .. }) => "lease-lost",
+        Some(NodeStopReason::Fenced) => "fenced",
+        // The engine reports ProposalFailure::Restart only through this detail text.
+        Some(NodeStopReason::CommitPipelineFailed { detail })
+            if detail.contains("earlier epoch") =>
+        {
+            "older-epoch-batch"
+        }
+        Some(NodeStopReason::CommitPipelineFailed { .. }) => "commit-pipeline-failed",
+        Some(NodeStopReason::LocalStoreFailed { .. }) => "local-store-failed",
+    }
 }
 
 fn start_error_kind(error: &EngineStartError) -> &'static str {

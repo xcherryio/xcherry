@@ -79,6 +79,14 @@ pub struct EngineSimulationSummary {
     pub attempts_compared_after_quiet_crash: u64,
     /// Processes that stopped by themselves, such as after losing the lease.
     pub self_stopped_processes: u64,
+    /// Those stops by reason, such as `older-epoch-batch` when a late write of a dead
+    /// predecessor held the next log seq.
+    pub self_stop_reasons: BTreeMap<String, u64>,
+    /// Writes that took effect after their process died, by key class.
+    pub writes_landed_after_crash: BTreeMap<String, u64>,
+    /// EpochStart batches written below a batch that had already landed, which recovery voids
+    /// or fills up to.
+    pub epoch_starts_below_landed_batches: u64,
     /// Failed process starts, by error kind.
     pub start_failures: BTreeMap<String, u64>,
     /// Wall-clock jumps of a process.
@@ -139,6 +147,12 @@ impl EngineSimulationSummary {
         merge_counts(&mut self.rejected_by_kind, &other.rejected_by_kind);
         self.attempts_compared_after_quiet_crash += other.attempts_compared_after_quiet_crash;
         self.self_stopped_processes += other.self_stopped_processes;
+        merge_counts(&mut self.self_stop_reasons, &other.self_stop_reasons);
+        merge_counts(
+            &mut self.writes_landed_after_crash,
+            &other.writes_landed_after_crash,
+        );
+        self.epoch_starts_below_landed_batches += other.epoch_starts_below_landed_batches;
         merge_counts(&mut self.start_failures, &other.start_failures);
         self.clock_jumps += other.clock_jumps;
         merge_counts(&mut self.injected_faults, &other.injected_faults);

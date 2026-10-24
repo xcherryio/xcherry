@@ -141,6 +141,8 @@ fn assert_covered(total: &EngineSimulationSummary) {
         (&total.snapshot_reads_during_start, "takeover"),
         (&total.old_epoch_write_attempts, "log"),
         (&total.old_epoch_write_attempts, "lease"),
+        (&total.writes_landed_after_crash, "log"),
+        (&total.self_stop_reasons, "older-epoch-batch"),
     ] {
         assert!(
             count(counts, name) > 0,
@@ -160,6 +162,10 @@ fn assert_covered(total: &EngineSimulationSummary) {
         ("old-epoch overlaps", total.old_epoch_overlaps),
         ("crashes during start", total.crashes_during_start),
         ("self-stopped processes", total.self_stopped_processes),
+        (
+            "EpochStarts below landed batches",
+            total.epoch_starts_below_landed_batches,
+        ),
         ("clock jumps", total.clock_jumps),
         ("acknowledged writes", total.acknowledged_writes),
         ("checked reads", total.checked_reads),

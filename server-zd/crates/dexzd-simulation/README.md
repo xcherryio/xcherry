@@ -33,8 +33,10 @@ runtime with paused time, and every choice derives from one seed.
   HTTP 5xx and 503, 409 conflicts, timeouts, and lost responses. A failed or timed-out write may
   still take effect. A lost response hides only a write that took effect; a write that failed,
   such as a 412, returns its own result. Old-epoch processes produce real 412 races.
-- **Processes.** A crash first cuts the process off from storage; writes already on the wire may
-  still land. The successor's local store is kept, lost (restored from the newest snapshot), or
+- **Processes.** A crash first cuts the process off from storage. Every write runs on a task
+  that the shared storage owns, so a write already sent lands even after its process and
+  caller are gone: at its normal time, during the successor's recovery, or just after the
+  successor starts serving. Some crashes wait until two log writes are in flight. The successor's local store is kept, lost (restored from the newest snapshot), or
   rolled back to an earlier copy. Some successors take over while the old-epoch process still
   runs and writes, because their wall clock is ahead. Wall clocks also jump forward and back.
 - **Workers and clients.** Simulated pull Workers sit behind the engine's dispatch ports. They
@@ -76,8 +78,11 @@ fault kind with each effect it can have on a call, such as a timed-out write tha
 not take effect. It requires every restart mode and Worker behavior, and crashes during
 recovery. It also requires 412 races on log and lease objects. An old-epoch window opens only
 when a successor's lease write takes effect; the seed set requires log and lease writes that
-old-epoch processes started, and frames they applied, inside such a window. Log cleanup
-deletions, snapshot restores during starts, and rejected duplicate results are required too.
+old-epoch processes started, and frames they applied, inside such a window. Log writes that
+landed after their process died are required, along with EpochStarts written below an
+already landed batch (the recovery void and fill path) and successors that stopped on an
+older-epoch batch at their next seq. Log cleanup deletions, snapshot restores during starts,
+and rejected duplicate results are required too.
 So are running attempts compared after the quiet crash, and live runs in the final state.
 
 ### Not covered yet

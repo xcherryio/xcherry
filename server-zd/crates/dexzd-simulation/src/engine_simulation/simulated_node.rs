@@ -23,7 +23,7 @@ use dexzd_engine::{
     RuntimeConfig, SnapshotConfig, default_run_settings,
 };
 use dexzd_keyspace::{ColumnFamily, KEY_LAYOUT_VERSION};
-use dexzd_object_store::{InMemoryObjectStore, ObjectStore, WriteCondition};
+use dexzd_object_store::{ObjectStore, WriteCondition};
 use dexzd_protocol::dexzd::v1::{ClusterObject, PartitionHashAlgorithm, RunSettings};
 use dexzd_request_validation::ValidationConfig;
 use dexzd_storage::{InMemoryLocalStore, LocalStore, ScanDirection, WriteBatch};
@@ -36,7 +36,7 @@ use crate::engine_simulation::event_trace::EventTrace;
 use crate::engine_simulation::simulated_clock::{
     START_UNIX_MICROS, SimulatedWallClock, duration_micros,
 };
-use crate::engine_simulation::simulated_object_store::{NodeObjectStore, StorageObservations};
+use crate::engine_simulation::simulated_object_store::{NodeObjectStore, SharedObjectStorage};
 use crate::engine_simulation::simulated_workers::SimulatedWorkers;
 
 /// The single node of the simulated cluster.
@@ -51,11 +51,11 @@ pub(crate) const LEASE_TAKEOVER_GRACE: Duration = Duration::from_secs(1);
 
 /// What every node process of one seed shares.
 pub(crate) struct ClusterEnvironment {
-    pub(crate) shared_store: Arc<InMemoryObjectStore>,
+    /// The shared object store, its observations, and writes still on their way to it.
+    pub(crate) storage: Arc<SharedObjectStorage>,
     pub(crate) workers: Arc<SimulatedWorkers>,
     pub(crate) committed_log: Arc<CommittedLog>,
     pub(crate) trace: Arc<EventTrace>,
-    pub(crate) storage_observations: Arc<Mutex<StorageObservations>>,
     /// The seeded source of every ID the engine persists, shared by all processes.
     pub(crate) id_source: Arc<dyn EngineIdSource>,
     /// How long closed runs stay before their purge; some seeds keep them past the end.
@@ -73,12 +73,10 @@ impl ClusterEnvironment {
         fault_probability: f64,
     ) -> Arc<NodeObjectStore> {
         let object_store = Arc::new(NodeObjectStore::new(
-            Arc::clone(&self.shared_store),
+            Arc::clone(&self.storage),
             process_label.to_owned(),
             start_kind.to_owned(),
             fault_seed,
-            Arc::clone(&self.trace),
-            Arc::clone(&self.storage_observations),
         ));
         object_store.set_fault_probability(fault_probability);
         object_store
@@ -99,7 +97,8 @@ impl ClusterEnvironment {
             key_layout_version: KEY_LAYOUT_VERSION,
             created_at_unix_micros: START_UNIX_MICROS,
         };
-        self.shared_store
+        self.storage
+            .store
             .put(
                 CLUSTER_OBJECT_KEY,
                 Bytes::from(cluster.encode_to_vec()),
