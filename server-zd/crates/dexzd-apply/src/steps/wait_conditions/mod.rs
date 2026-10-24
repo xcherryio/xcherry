@@ -6,14 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Wait conditions (plan section 9.2): registration after WaitFor, evaluation when channels,
-//! timers, or child Flows change, and consumption of channel messages into condition results.
-//!
-//! A waiting Step owns these rows: one Waiter row per distinct channel of its condition and one
-//! WaitCondition timer per pending timer condition. Both are removed when the Step leaves
-//! waiting, is canceled, or the Flow closes. Messages are consumed only at the moment the
-//! condition is satisfied; until its Execute ends they are claimed, held by
-//! [`ValueHolder::ConditionResult`], and counted in the channel's `claimed_count`.
+//! Wait conditions: registration after WaitFor, evaluation on change, and message claims
+//! until Execute ends.
 
 mod condition_plan;
 mod timer_skip;
@@ -62,6 +56,8 @@ pub(crate) fn register_wait(
     condition: Option<&WaitingCondition>,
 ) -> Result<Result<(), ValueRejection>, ApplyError> {
     let Some(condition) = condition.filter(|condition| !is_empty_condition(condition)) else {
+        // Execute after WaitFor always receives results, even empty; only skip_wait_for omits them.
+        step.condition_results = Some(ConditionResultsRecord::default());
         step.phase = StepExecutionPhase::Execute as i32;
         make_invocation_pending(
             transaction,
