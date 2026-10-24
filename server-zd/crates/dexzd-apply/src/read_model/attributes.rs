@@ -9,14 +9,12 @@
 use std::collections::BTreeSet;
 
 use dexzd_keyspace::{FlowHash, RunId};
-use dexzd_protocol::dex::{EncodedObject, GetAttributesResponse, Kv, Value, value};
+use dexzd_protocol::dex::{GetAttributesResponse, Kv, Value, value};
 use dexzd_protocol::dexzd::v1::{HardDeleteObjectReference, stored_value};
 
 use crate::FlowStateReader;
 use crate::read_model::{ReadModelError, RunView};
 use crate::values::wire_value;
-
-const PERMISSIONS_ATTRIBUTE_KEY: &str = "DexWorkQueuePermissions";
 
 /// Attribute object the API server must fetch before returning GetAttributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +48,6 @@ pub fn get_attributes(
             .attributes(&view.transaction)?
             .into_iter()
             .map(|(key, _)| key)
-            .chain(std::iter::once(PERMISSIONS_ATTRIBUTE_KEY.to_owned()))
             .collect()
     } else {
         keys.iter().cloned().collect()
@@ -58,16 +55,6 @@ pub fn get_attributes(
     let mut attributes = Vec::new();
     let mut hard_delete_attributes = Vec::new();
     for key in selected {
-        if key == PERMISSIONS_ATTRIBUTE_KEY {
-            let permissions = view.rows.permission_set(&view.transaction)?.permissions;
-            if !permissions.is_empty() {
-                attributes.push(Kv {
-                    key,
-                    value: Some(permissions_value(&permissions)),
-                });
-            }
-            continue;
-        }
         let Some(record) = view.rows.attribute(&view.transaction, &key)? else {
             continue;
         };
@@ -93,7 +80,7 @@ pub fn get_attributes(
 }
 
 pub(super) fn all_attribute_kvs(view: &RunView<'_>) -> Result<Vec<Kv>, ReadModelError> {
-    let mut attributes: Vec<Kv> = view
+    let attributes: Vec<Kv> = view
         .rows
         .attributes(&view.transaction)?
         .into_iter()
@@ -109,14 +96,6 @@ pub(super) fn all_attribute_kvs(view: &RunView<'_>) -> Result<Vec<Kv>, ReadModel
             })
         })
         .collect();
-    let permissions = view.rows.permission_set(&view.transaction)?.permissions;
-    if !permissions.is_empty() {
-        attributes.push(Kv {
-            key: PERMISSIONS_ATTRIBUTE_KEY.to_owned(),
-            value: Some(permissions_value(&permissions)),
-        });
-        attributes.sort_by(|left, right| left.key.cmp(&right.key));
-    }
     Ok(attributes)
 }
 
@@ -128,20 +107,4 @@ fn hard_delete_reference(run_id: RunId, object: &HardDeleteObjectReference) -> V
         value::Kind::InternalBlobIdForObjValue(reference)
     };
     Value { kind: Some(kind) }
-}
-
-fn permissions_value(permissions: &[String]) -> Value {
-    let json = serde_json::to_string(permissions)
-        .expect("serializing a string slice into JSON cannot fail")
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029");
-    Value {
-        kind: Some(value::Kind::ObjValue(EncodedObject {
-            encoding: "json".to_owned(),
-            payload: json.into_bytes(),
-        })),
-    }
 }

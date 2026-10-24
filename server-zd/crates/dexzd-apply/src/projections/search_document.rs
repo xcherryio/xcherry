@@ -24,6 +24,7 @@ use time::{OffsetDateTime, UtcOffset};
 use crate::ApplyError;
 use crate::command_handlers::CommandScope;
 use crate::command_handlers::run_cursor::RunCursor;
+use crate::projections::work_queue_permissions;
 use crate::state_access::FlowTransaction;
 use crate::values::load_stored_value;
 
@@ -130,7 +131,14 @@ pub(crate) fn refresh_search_document(
             indexed.insert(index_key, indexed_value);
         }
     }
-    let permissions = cursor.rows.permission_set(transaction)?.permissions;
+    let permission_value = cursor
+        .rows
+        .attribute(transaction, work_queue_permissions::ATTRIBUTE_KEY)?
+        .and_then(|attribute| attribute.value)
+        .map(|stored| load_stored_value(transaction, cursor.rows, &stored))
+        .transpose()?
+        .flatten();
+    let (permissions, _) = work_queue_permissions::decode(permission_value.as_ref());
     let parent_flow_id = record
         .parent
         .as_ref()

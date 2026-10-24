@@ -28,8 +28,8 @@ use dexzd_protocol::dex::{
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, AttributesSetCommand, ChannelMessageRecord, CommandReply, FlowCommand,
-    FlowStartCommand, HistoryRecord, PermissionSetRecord, RpcCommittedCommand, RunRecord,
-    RunSettings, StepExecutionRecord, ValueBirthRecord, command_reply, flow_command::Command,
+    FlowStartCommand, HistoryRecord, RpcCommittedCommand, RunRecord, RunSettings,
+    StepExecutionRecord, ValueBirthRecord, command_reply, flow_command::Command, stored_value,
 };
 use prost::Message;
 
@@ -303,18 +303,25 @@ fn plain_rpc_applies_writes_publications_permissions_and_history() {
         )
         .expect("publication exists");
     assert_eq!(message.message_id, "message-1");
-    let permissions: PermissionSetRecord = harness
+    let permissions: AttributeRecord = harness
         .state
         .row(
             ColumnFamily::Flow,
-            &run_singleton_key(
+            &run_named_key(
                 harness.context.flow_hash,
                 harness.run_id(),
-                RunTable::PermissionSet,
+                RunTable::Attribute,
+                "DexWorkQueuePermissions",
             ),
         )
-        .expect("permissions exist");
-    assert_eq!(permissions.permissions, vec!["read-order"]);
+        .expect("permission projection exists");
+    let Some(stored_value::Kind::InlineValue(Value {
+        kind: Some(value::Kind::ObjValue(projection)),
+    })) = permissions.value.and_then(|stored| stored.kind)
+    else {
+        panic!("expected an inline JSON permission projection");
+    };
+    assert_eq!(projection.payload, br#"["read-order"]"#);
     assert_eq!(harness.run_record().sticky_app_worker_id, "");
     let history: HistoryRecord = harness
         .state

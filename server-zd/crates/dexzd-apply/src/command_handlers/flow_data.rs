@@ -10,12 +10,14 @@
 //! carries them (plan sections 9.2 and 9.3). Effects apply in the order: Attribute writes,
 //! deletions, publications.
 
+use std::collections::BTreeSet;
+
 use dexzd_keyspace::row_keys::{
     hard_delete_current_key, hard_delete_pending_key, run_item_index_key,
 };
 use dexzd_keyspace::{ColumnFamily, IndexKind};
 use dexzd_protocol::dex::{
-    ActionPermissionMappings, AttributeWrite, ChannelMessage, ChannelMessageDeletion, Value,
+    ActionPermissionMappings, AttributeWrite, ChannelMessage, ChannelMessageDeletion, Value, value,
 };
 use dexzd_protocol::dexzd::v1::{
     AttributeRecord, ChannelMessageRecord, HardDeleteObjectRecord, HardDeleteObjectReference,
@@ -23,9 +25,11 @@ use dexzd_protocol::dexzd::v1::{
 };
 
 use crate::command_handlers::run_cursor::RunCursor;
+use crate::projections::work_queue_permissions;
 use crate::state_access::FlowTransaction;
 use crate::values::{
-    ValueHolder, ValueRejection, is_null_value, release_stored_value, store_value,
+    ValueHolder, ValueRejection, is_null_value, load_stored_value, release_stored_value,
+    store_value,
 };
 use crate::{ApplyEffect, ApplyError, WaitableChange};
 
@@ -42,7 +46,12 @@ pub(crate) fn apply_attribute_writes(
     hard_delete_objects: &[HardDeleteObjectReference],
     permission_mappings: Option<&ActionPermissionMappings>,
 ) -> Result<Result<Vec<String>, ValueRejection>, ApplyError> {
-    let mut changed_keys = Vec::with_capacity(writes.len());
+    let projected_write = permission_mappings
+        .map(|mappings| apply_permission_mappings(transaction, cursor, writes, mappings))
+        .transpose()?
+        .flatten();
+    let mut changed_keys =
+        Vec::with_capacity(writes.len() + usize::from(projected_write.is_some()));
     for (write_index, write) in writes.iter().enumerate() {
         let hard_delete_object = hard_delete_objects
             .iter()
@@ -66,8 +75,12 @@ pub(crate) fn apply_attribute_writes(
         }
         changed_keys.push(write.key.clone());
     }
-    if let Some(mappings) = permission_mappings {
-        apply_permission_mappings(transaction, cursor, writes, mappings)?;
+    if let Some(write) = projected_write {
+        if let Err(rejection) = apply_plain_write(transaction, cursor, &write)? {
+            return Ok(Err(rejection));
+        }
+        cursor.indexed_attribute_writes.push(write.clone());
+        changed_keys.push(write.key);
     }
     if !changed_keys.is_empty() {
         let mut keys = changed_keys.clone();
@@ -233,49 +246,84 @@ pub(crate) fn schedule_hard_delete(
     });
 }
 
-/// Adds work queue permissions for written Attributes whose new value equals a mapped value.
-/// The set only grows (plan section 9.3).
-pub(crate) fn apply_permission_mappings(
-    transaction: &mut FlowTransaction<'_>,
-    cursor: &mut RunCursor,
+/// Builds the permission write from the pre-batch set and post-batch Attribute values.
+fn apply_permission_mappings(
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
     writes: &[AttributeWrite],
     mappings: &ActionPermissionMappings,
-) -> Result<(), ApplyError> {
-    let mut permission_set = cursor.rows.permission_set(transaction)?;
-    let mut is_changed = false;
+) -> Result<Option<AttributeWrite>, ApplyError> {
+    let current_value =
+        stored_attribute_value(transaction, cursor, work_queue_permissions::ATTRIBUTE_KEY)?;
+    let (current_permissions, is_current_valid) =
+        work_queue_permissions::decode(current_value.as_ref());
+    let mut permission_set: BTreeSet<String> = current_permissions.iter().cloned().collect();
     for mapping in &mappings.mappings {
-        let Some(write) = writes
-            .iter()
-            .rev()
-            .find(|write| write.key == mapping.attribute_key)
-        else {
-            continue;
-        };
-        let Some(value) = &write.value else { continue };
-        let is_match = mapping
-            .equal_values
-            .iter()
-            .any(|candidate| values_equal(candidate, value));
-        if is_match
-            && !permission_set
-                .permissions
-                .contains(&mapping.required_permission)
+        let value =
+            attribute_value_after_writes(transaction, cursor, writes, &mapping.attribute_key)?;
+        if let Some(value) = value
+            && mapping
+                .equal_values
+                .iter()
+                .any(|candidate| values_equal(candidate, &value))
         {
-            permission_set
-                .permissions
-                .push(mapping.required_permission.clone());
-            is_changed = true;
+            permission_set.insert(mapping.required_permission.clone());
         }
     }
-    if is_changed {
-        permission_set.permissions.sort();
-        cursor.rows.put_permission_set(transaction, &permission_set);
+    let permissions: Vec<String> = permission_set.into_iter().collect();
+    if is_current_valid && current_permissions == permissions {
+        return Ok(None);
     }
-    Ok(())
+    Ok(Some(AttributeWrite {
+        key: work_queue_permissions::ATTRIBUTE_KEY.to_owned(),
+        value: Some(work_queue_permissions::projected_value(&permissions)),
+        index_config: Some(work_queue_permissions::index_config()),
+        ..AttributeWrite::default()
+    }))
+}
+
+fn attribute_value_after_writes(
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
+    writes: &[AttributeWrite],
+    attribute_key: &str,
+) -> Result<Option<Value>, ApplyError> {
+    if let Some(write) = writes.iter().rev().find(|write| write.key == attribute_key) {
+        return Ok(if is_null_value(write.value.as_ref()) {
+            None
+        } else {
+            write.value.clone()
+        });
+    }
+    stored_attribute_value(transaction, cursor, attribute_key)
+}
+
+fn stored_attribute_value(
+    transaction: &FlowTransaction<'_>,
+    cursor: &RunCursor,
+    attribute_key: &str,
+) -> Result<Option<Value>, ApplyError> {
+    let Some(record) = cursor.rows.attribute(transaction, attribute_key)? else {
+        return Ok(None);
+    };
+    let Some(stored) = record.value.as_ref() else {
+        return Ok(None);
+    };
+    load_stored_value(transaction, cursor.rows, stored)
 }
 
 fn values_equal(left: &Value, right: &Value) -> bool {
-    left == right
+    match (left.kind.as_ref(), right.kind.as_ref()) {
+        (Some(value::Kind::StringValue(left)), Some(value::Kind::StringValue(right))) => {
+            left == right
+        }
+        (Some(value::Kind::BoolValue(left)), Some(value::Kind::BoolValue(right))) => left == right,
+        (Some(value::Kind::IntValue(left)), Some(value::Kind::IntValue(right))) => left == right,
+        (Some(value::Kind::DoubleValue(left)), Some(value::Kind::DoubleValue(right))) => {
+            left == right
+        }
+        _ => false,
+    }
 }
 
 /// Deletes Channel messages by ID. Best effort: missing messages are skipped. Returns the
