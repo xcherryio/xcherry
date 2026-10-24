@@ -6,15 +6,16 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
-//! Wait RPCs answer like the Go Server when the request timeout or the client's deadline ends.
+//! Wait RPCs and ReadStream answer like the Go Server when the request timeout or the client's
+//! deadline ends.
 
 use std::time::Duration;
 
 use dexzd_protocol::dex::flow_service_client::FlowServiceClient;
 use dexzd_protocol::dex::{
     AttributeMatch, AttributeMatchOperator, ErrorSubStatus, FlowConfig, FlowStartOptions,
-    ServiceErrorResponse, StartFlowRequest, WaitForAttributeRequest, WaitForFlowRequest,
-    WaitForHistoryEventRequest, WaitForStepCompletionRequest, WorkerTarget,
+    ReadStreamRequest, ServiceErrorResponse, StartFlowRequest, WaitForAttributeRequest,
+    WaitForFlowRequest, WaitForHistoryEventRequest, WaitForStepCompletionRequest, WorkerTarget,
 };
 use prost::Message;
 use tokio::time::Instant;
@@ -174,6 +175,7 @@ async fn wait_rpcs_answer_go_timeouts_before_the_client_deadline() {
         attribute_at_transport_deadline,
         flow_at_transport_deadline,
         history_at_transport_deadline,
+        stream_at_transport_deadline,
     ) = tokio::join!(
         time_out(&channel, ONE_SECOND, |mut client| async move {
             client
@@ -232,6 +234,20 @@ async fn wait_rpcs_answer_go_timeouts_before_the_client_deadline() {
                     .await
             }
         }),
+        time_out(&channel, ONE_SECOND, |mut client| async move {
+            client
+                .read_stream(with_timeout(
+                    ReadStreamRequest {
+                        flow_id: IDLE_FLOW_ID.to_owned(),
+                        flow_type: IDLE_FLOW_TYPE.to_owned(),
+                        stream_name: "progress".to_owned(),
+                        wait_time_seconds: 30,
+                        ..ReadStreamRequest::default()
+                    },
+                    ONE_SECOND,
+                ))
+                .await
+        }),
     );
     let near_deadline = ONE_SECOND / 2;
     step_at_shared_deadline.assert_answer(
@@ -279,6 +295,12 @@ async fn wait_rpcs_answer_go_timeouts_before_the_client_deadline() {
     history_at_transport_deadline.assert_answer(
         ErrorSubStatus::LongPollTimeOut,
         "history long poll exceeded the deadline",
+        near_deadline,
+        ONE_SECOND,
+    );
+    stream_at_transport_deadline.assert_answer(
+        ErrorSubStatus::LongPollTimeOut,
+        "Stream read timed out",
         near_deadline,
         ONE_SECOND,
     );

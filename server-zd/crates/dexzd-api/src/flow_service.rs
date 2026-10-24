@@ -33,6 +33,7 @@ use dexzd_search::{SearchBackend, SearchError, SearchRequest};
 use tonic::{Request, Response, Status};
 
 use crate::client_deadline::WaitCallDeadline;
+use crate::stream_operations::STREAM_READ_TIMEOUT_MESSAGE;
 use crate::{
     AttributeIndexes, FlowOperationError, FlowOperations, FlowServiceConfig, StreamOperations,
 };
@@ -194,10 +195,19 @@ impl flow_service_server::FlowService for DexFlowService {
         &self,
         request: Request<ReadStreamRequest>,
     ) -> Result<Response<ReadStreamResponse>, Status> {
+        let deadline = WaitCallDeadline::new(
+            &request,
+            0,
+            STREAM_READ_TIMEOUT_MESSAGE,
+            STREAM_READ_TIMEOUT_MESSAGE,
+        );
         respond(
-            self.dependencies
-                .stream_operations
-                .read_stream(TenantId::DEFAULT, request.into_inner())
+            deadline
+                .bound(
+                    self.dependencies
+                        .stream_operations
+                        .read_stream(TenantId::DEFAULT, request.into_inner()),
+                )
                 .await,
         )
     }

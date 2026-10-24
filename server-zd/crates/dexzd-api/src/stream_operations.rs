@@ -17,6 +17,9 @@ use dexzd_stream_store::{StreamMessage, StreamStore, StreamStoreError, WriteStre
 
 use crate::FlowOperationError;
 
+/// The Go Server's ReadStream message when the wait time or the client deadline ends first.
+pub(crate) const STREAM_READ_TIMEOUT_MESSAGE: &str = "Stream read timed out";
+
 /// Serves the Stream RPCs from the node's Stream Store.
 ///
 /// Streams do not depend on Flows, so these calls bypass the runtime.
@@ -122,7 +125,7 @@ impl StreamOperations {
             )
             .await
             .map_err(stream_store_error)?
-            .ok_or_else(|| FlowOperationError::long_poll_timeout("Stream read timed out"))?;
+            .ok_or_else(|| FlowOperationError::long_poll_timeout(STREAM_READ_TIMEOUT_MESSAGE))?;
         Ok(ReadStreamResponse {
             message: Some(proto_stream_message(message)),
         })
