@@ -21,7 +21,7 @@ use dexzd_protocol::dex::{
     invoke_execute_method_output, invoke_wait_for_method_output, poll_worker_task,
     poll_worker_task_frame, poll_worker_task_request, poll_worker_task_response,
 };
-use s3mock::{Durability, EtagMode, ListObjectsRequest, Store, StoreConfig};
+use s3mock::{DeleteObjectRequest, Durability, EtagMode, ListObjectsRequest, Store, StoreConfig};
 use s3mock_server::{ServerConfig, ServerHandle, SignatureVerification};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
@@ -166,6 +166,15 @@ impl S3Emulator {
     pub(crate) async fn clear_fault_rules(&self) {
         let response = self.admin_request("DELETE", "/_s3mock/faults", "").await;
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+
+    /// Deletes every object in `bucket` whose key starts with `prefix`, bypassing fault rules.
+    pub(crate) fn delete_keys_under(&self, bucket: &str, prefix: &str) {
+        for key in self.keys_under(bucket, prefix) {
+            self.store
+                .delete_object(bucket, &key, &DeleteObjectRequest::default())
+                .expect("the emulator deletes the object");
+        }
     }
 
     /// Returns the emulator's JSON log of recent requests.
