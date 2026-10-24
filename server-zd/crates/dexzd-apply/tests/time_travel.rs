@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use dexzd_apply::diagnostics::{current_semantic_point_hash, time_travel_target_hash};
 use dexzd_apply::read_model::get_search_document;
 use dexzd_apply::{
     ApplyContext, ApplyEffect, ApplyError, ApplyOutcome, FlowStateReader, StateReadError, StateRow,
@@ -1129,7 +1130,7 @@ fn rebuilt_states_equal_the_recorded_states_at_every_point() {
         checkpoint_max_commands: 3,
         ..settings()
     });
-    let mut recorded: Vec<(u64, i64, AttemptRows, i32)> = Vec::new();
+    let mut recorded: Vec<(u64, i64, AttemptRows, i32, [u8; 16])> = Vec::new();
     let mut record_point = |harness: &Harness| {
         let seq = harness.last_seq();
         let history = harness.history_record(seq).unwrap();
@@ -1139,6 +1140,19 @@ fn rebuilt_states_equal_the_recorded_states_at_every_point() {
                 history.timestamp_micros,
                 harness.attempt_rows(),
                 harness.run_record().status,
+                current_semantic_point_hash(
+                    &harness.context,
+                    &harness.state,
+                    harness.run(),
+                    &history
+                        .command
+                        .as_ref()
+                        .expect("history command")
+                        .command_id,
+                )
+                .expect("hash current semantic point")
+                .expect("semantic history point")
+                .state_hash,
             ));
         }
     };
@@ -1163,7 +1177,21 @@ fn rebuilt_states_equal_the_recorded_states_at_every_point() {
     harness.complete_execute("PackStep-1", 1, force_complete());
     record_point(&harness);
     assert!(harness.attempt_record(1).checkpoint_seqs.len() > 2);
-    for (seq, timestamp, rows, status) in recorded {
+    for (seq, timestamp, rows, status, expected_hash) in recorded {
+        let diagnostic_command = harness.command(Command::TimeTravel(TimeTravelCommand {
+            request: Some(ResetFlowRequest {
+                run_attempt: 1,
+                ..reset_to_time(timestamp)
+            }),
+        }));
+        let reconstructed_hash =
+            time_travel_target_hash(&harness.context, &harness.state, &diagnostic_command)
+                .expect("hash reconstructed semantic point")
+                .expect("target exists");
+        assert_eq!(
+            reconstructed_hash.state_hash, expected_hash,
+            "state hash at seq {seq}"
+        );
         let (attempt, _) = harness.travel_to(ResetFlowRequest {
             run_attempt: 1,
             ..reset_to_time(timestamp)
@@ -1172,6 +1200,68 @@ fn rebuilt_states_equal_the_recorded_states_at_every_point() {
         assert_eq!(harness.attempt_rows(), rows, "state at seq {seq}");
         assert_eq!(harness.run_record().status, status, "status at seq {seq}");
     }
+}
+
+#[test]
+fn diagnostic_hash_detects_a_broken_time_travel_rebuild() {
+    let mut harness = Harness::new();
+    harness.start(start_request());
+    let history = harness
+        .history_record(harness.last_seq())
+        .expect("start history");
+    let expected = current_semantic_point_hash(
+        &harness.context,
+        &harness.state,
+        harness.run(),
+        &history
+            .command
+            .as_ref()
+            .expect("history command")
+            .command_id,
+    )
+    .expect("hash current state")
+    .expect("start is semantic");
+    let command = harness.command(Command::TimeTravel(TimeTravelCommand {
+        request: Some(reset(FlowResetType::Beginning)),
+    }));
+    let original = time_travel_target_hash(&harness.context, &harness.state, &command)
+        .expect("rebuild target")
+        .expect("beginning exists");
+    assert_eq!(original, expected);
+
+    let checkpoint_key = checkpoint_key(
+        harness.context.flow_hash,
+        harness.run(),
+        1,
+        expected.run_seq,
+    );
+    let checkpoint_bytes = harness
+        .state
+        .rows
+        .get(&(ColumnFamily::History, checkpoint_key.clone()))
+        .expect("checkpoint exists");
+    let mut checkpoint =
+        CheckpointRecord::decode(checkpoint_bytes.as_slice()).expect("checkpoint decodes");
+    checkpoint
+        .run_status
+        .as_mut()
+        .expect("checkpoint has status")
+        .closed_at_micros += 1;
+    harness.state.rows.insert(
+        (ColumnFamily::History, checkpoint_key),
+        checkpoint.encode_to_vec(),
+    );
+    let broken = time_travel_target_hash(&harness.context, &harness.state, &command)
+        .expect("rebuild corrupted target")
+        .expect("beginning exists");
+    assert_eq!(
+        (broken.run_id, broken.run_attempt, broken.run_seq),
+        (expected.run_id, expected.run_attempt, expected.run_seq)
+    );
+    assert_ne!(
+        broken.state_hash, expected.state_hash,
+        "a corrupted rebuild must fail the hash check"
+    );
 }
 
 #[test]

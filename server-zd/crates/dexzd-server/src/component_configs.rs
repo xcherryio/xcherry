@@ -97,6 +97,10 @@ impl ComponentConfigs {
                 },
             },
             commit: CommitConfig {
+                debug_replay_checks: config
+                    .commit
+                    .debug_replay_checks
+                    .unwrap_or(cfg!(debug_assertions)),
                 batch_window: config.commit.batch_window,
                 seal_at_bytes: to_usize("commit.sealAtBytes", config.commit.seal_at_bytes)?,
                 max_in_flight_batches: to_usize(

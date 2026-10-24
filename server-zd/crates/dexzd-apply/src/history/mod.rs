@@ -11,6 +11,7 @@
 
 mod attempt_scope;
 mod checkpoints;
+pub mod diagnostics;
 mod lineage;
 mod replay_state;
 mod reset_target;

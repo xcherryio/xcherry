@@ -31,9 +31,11 @@ pub struct CommitConfig {
     pub applier_lanes: usize,
     /// Defaults to 64; partition frames queued per applier lane before the commit pipeline waits.
     pub applier_queue_frames: usize,
-    /// Defaults to false; when true, appliers apply every command twice and compare the
-    /// outcomes, and [`crate::CommandCommitter::check_speculative_outcome`] compares
-    /// speculative and committed outcomes. Any difference stops the partition.
+    /// Defaults to true in debug builds and false in release builds. When true, appliers
+    /// apply every command twice and compare the outcomes, and
+    /// [`crate::CommandCommitter::check_speculative_outcome`] compares speculative and
+    /// committed outcomes. Time-travel reconstruction checks semantic-point hashes.
+    /// Any difference stops the partition.
     pub debug_replay_checks: bool,
 }
 
@@ -48,7 +50,7 @@ impl Default for CommitConfig {
             batch_write_deadline: Duration::from_secs(10),
             applier_lanes: 8,
             applier_queue_frames: 64,
-            debug_replay_checks: false,
+            debug_replay_checks: cfg!(debug_assertions),
         }
     }
 }
