@@ -10,13 +10,12 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use dexzd_clock::WallClock;
 use dexzd_cluster_metadata::{
     ClusterConfig, LeaseConfig, LeaseHandle, LeaseReleaseError, LeaseStatus, NodeConfig,
-    acquire_lease,
 };
 use dexzd_keyspace::PartitionId;
 use dexzd_log::{CommitPipeline, StreamIdentity};
@@ -101,18 +100,20 @@ impl EngineNode {
     where
         F: FnOnce(EngineServices) -> EngineRuntimeHooks,
     {
-        let lease_acquired = AtomicBool::new(false);
-        Self::start_with_lease_observer(config, dependencies, runtime_factory, &lease_acquired)
-            .await
+        let (_cancellation_sender, mut cancellation) = watch::channel(false);
+        let started =
+            Self::start_until_cancelled(config, dependencies, runtime_factory, &mut cancellation)
+                .await?;
+        Ok(started.expect("startup without cancellation must return an engine node"))
     }
 
-    /// Starts the node and marks `lease_acquired` before recovery begins.
-    pub async fn start_with_lease_observer<F>(
+    /// Starts the node, or returns `None` when cancellation arrives while waiting for its lease.
+    pub async fn start_until_cancelled<F>(
         config: &EngineNodeConfig,
         dependencies: EngineNodeDependencies,
         runtime_factory: F,
-        lease_acquired: &AtomicBool,
-    ) -> Result<Self, EngineStartError>
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> Result<Option<Self>, EngineStartError>
     where
         F: FnOnce(EngineServices) -> EngineRuntimeHooks,
     {
@@ -132,14 +133,18 @@ impl EngineNode {
         .await?;
         let partition_count = unleased_metadata.partition_count();
         let cluster_id = unleased_metadata.cluster_id()?;
-        let lease = acquire_lease(
-            object_store.clone(),
-            clock.clone(),
-            &config.node,
-            &config.lease,
-        )
-        .await?;
-        lease_acquired.store(true, Ordering::Release);
+        let Some(lease) = config
+            .lease
+            .acquire_until_cancelled(
+                object_store.clone(),
+                clock.clone(),
+                &config.node,
+                cancellation,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
         let epoch = lease.epoch();
         tracing::info!(node_id = %config.node.node_id, epoch, partition_count, "engine node recovering");
         let state = Arc::new(CommitState::new(partition_count));
@@ -323,7 +328,7 @@ impl EngineNode {
                     appliers,
                     lease,
                 } = starting.take_parts();
-                Ok(Self {
+                Ok(Some(Self {
                     committer,
                     state,
                     appliers: appliers.expect("the applier pool starts before the node serves"),
@@ -331,7 +336,7 @@ impl EngineNode {
                     snapshots,
                     lease,
                     tasks,
-                })
+                }))
             }
             Err(error) => {
                 starting.release_after_failure().await;

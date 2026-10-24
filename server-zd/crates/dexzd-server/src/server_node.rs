@@ -12,7 +12,6 @@ mod search_projection;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -35,6 +34,7 @@ use dexzd_search::{SearchBackend, SearchError};
 use dexzd_stream_store::StreamStore;
 use dexzd_worker_dispatch::{WorkerDispatch, WorkerTaskService};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
@@ -122,8 +122,8 @@ impl Drop for RunningServer {
 pub(crate) async fn start_server(
     config: &Config,
     embedded_s3: Option<EmbeddedS3>,
-    lease_acquired: &AtomicBool,
-) -> Result<RunningServer, ServerError> {
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<Option<RunningServer>, ServerError> {
     let components = ComponentConfigs::from_config(config)?;
     let listener = TcpListener::bind(config.api.listen)
         .await
@@ -138,9 +138,16 @@ pub(crate) async fn start_server(
             source,
         })?;
     let grpc = GrpcServer::start(listener, components.grpc_max_message_bytes).await;
-    let started = ServerNode::start(config, &components, lease_acquired).await;
+    let started = ServerNode::start(config, &components, cancellation).await;
     let node = match started {
-        Ok(node) => node,
+        Ok(Some(node)) => node,
+        Ok(None) => {
+            grpc.abort().await;
+            if let Some(embedded_s3) = embedded_s3 {
+                embedded_s3.shutdown().await;
+            }
+            return Ok(None);
+        }
         Err(error) => {
             grpc.abort().await;
             if let Some(embedded_s3) = embedded_s3 {
@@ -152,11 +159,11 @@ pub(crate) async fn start_server(
     let shutdown_request = CancellationToken::new();
     let serving = tokio::spawn(node.serve(grpc, shutdown_request.clone(), embedded_s3));
     tracing::info!(address = %local_address, "dex-server-zd serving");
-    Ok(RunningServer {
+    Ok(Some(RunningServer {
         local_address,
         shutdown_request,
         serving,
-    })
+    }))
 }
 
 struct GrpcServer {
@@ -302,8 +309,8 @@ impl ServerNode {
     async fn start(
         config: &Config,
         components: &ComponentConfigs,
-        lease_acquired: &AtomicBool,
-    ) -> Result<Self, ServerError> {
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> Result<Option<Self>, ServerError> {
         let object_stores = ObjectStores::connect(
             &config.object_store,
             config.commit.multipart_threshold_bytes,
@@ -325,7 +332,7 @@ impl ServerNode {
             .as_ref()
             .map(ParadeDbSearch::committed_frames);
         let runtime_parts: Arc<Mutex<Option<RuntimeParts>>> = Arc::new(Mutex::new(None));
-        let started = EngineNode::start_with_lease_observer(
+        let started = EngineNode::start_until_cancelled(
             &components.engine_node,
             EngineNodeDependencies {
                 object_store: object_stores.primary.clone(),
@@ -383,7 +390,7 @@ impl ServerNode {
                     });
                 hooks
             },
-            lease_acquired,
+            cancellation,
         )
         .await;
         let parts = runtime_parts
@@ -391,7 +398,11 @@ impl ServerNode {
             .expect("runtime parts lock is poisoned only if a holder panicked")
             .take();
         let engine = match started {
-            Ok(engine) => engine,
+            Ok(Some(engine)) => engine,
+            Ok(None) => {
+                close_stream_store(&stream_store).await;
+                return Ok(None);
+            }
             Err(source) => {
                 if let Some(parts) = parts {
                     parts.registry.close_long_polls();
@@ -445,7 +456,7 @@ impl ServerNode {
                 search_backend,
             },
         );
-        Ok(Self {
+        Ok(Some(Self {
             engine,
             registry,
             effect_tasks,
@@ -453,7 +464,7 @@ impl ServerNode {
             stream_store,
             flow_service,
             search_projection,
-        })
+        }))
     }
 
     /// Serves until shutdown is requested or the node stops, then tears everything down.
