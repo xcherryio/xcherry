@@ -17,7 +17,7 @@ mod worker_harness;
 
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -443,32 +443,58 @@ fn parallel_subflows_entry(
     }
 }
 
+/// Starts the shared environment once so every flow smoke test reuses one Worker.
+fn shared_flow_smoke_environment() -> &'static FlowSmokeEnvironment {
+    static ENVIRONMENT: OnceLock<FlowSmokeEnvironment> = OnceLock::new();
+    ENVIRONMENT.get_or_init(FlowSmokeEnvironment::start)
+}
+
+/// Declares one filterable test per catalog entry that some engines reject.
+macro_rules! dedicated_flow_smoke_entry_tests {
+    ($($test_name:ident => $entry_name:literal,)*) => {
+        const DEDICATED_FLOW_SMOKE_ENTRY_NAMES: &[&str] = &[$($entry_name),*];
+        $(
+            #[test]
+            #[ignore = "requires dexcli dev"]
+            fn $test_name() {
+                run_dedicated_flow_smoke_entry($entry_name);
+            }
+        )*
+    };
+}
+
+dedicated_flow_smoke_entry_tests! {
+    flow_smoke_products_money_transfer => "products/money-transfer",
+    flow_smoke_products_order_processing => "products/order-processing",
+    flow_smoke_patterns_polling => "patterns/polling",
+    flow_smoke_patterns_entity_store => "patterns/entity-store",
+    flow_smoke_patterns_manual_recovery => "patterns/manual-recovery",
+    flow_smoke_patterns_recovery => "patterns/recovery",
+    flow_smoke_primitives_step_options_override => "primitives/step/options-override",
+}
+
+fn run_dedicated_flow_smoke_entry(entry_name: &str) {
+    let environment = shared_flow_smoke_environment();
+    let mut http_client = FlowSmokeHttpClient::new(environment.http_base_url.clone());
+    let entry = flow_smoke_catalog(&mut http_client)
+        .into_iter()
+        .find(|entry| entry.name == entry_name)
+        .unwrap_or_else(|| panic!("flow smoke entry {entry_name} is not in the catalog"));
+    run_flow_smoke_entry(&http_client, &entry);
+}
+
 #[test]
 #[ignore = "requires dexcli dev"]
 fn flow_smoke_all_registered_flows_via_controller() {
-    let environment = FlowSmokeEnvironment::start();
+    let environment = shared_flow_smoke_environment();
     let mut http_client = FlowSmokeHttpClient::new(environment.http_base_url.clone());
     let catalog = flow_smoke_catalog(&mut http_client);
     assert!(!catalog.is_empty(), "flow smoke catalog is empty");
-    let excluded_entries = read_excluded_flow_smoke_entries();
-    for excluded_name in &excluded_entries {
-        assert!(
-            catalog.iter().any(|entry| entry.name == excluded_name),
-            "excluded flow smoke entry {excluded_name} is not in the catalog"
-        );
-    }
-    for entry in catalog {
-        if excluded_entries.iter().any(|name| name == entry.name) {
-            continue;
-        }
-        let result = http_client.trigger_get(entry.path, &entry.query);
-        assert!(
-            !result.flow_id.is_empty(),
-            "{}: controller response did not include flowID",
-            entry.name
-        );
-        assert_flow_smoke_start_step(&entry, &result.flow_id, &result.run_id);
-        assert_flow_smoke_no_unexpected_failures(&entry, &result.flow_id, &result.run_id);
+    for entry in catalog
+        .iter()
+        .filter(|entry| !DEDICATED_FLOW_SMOKE_ENTRY_NAMES.contains(&entry.name))
+    {
+        run_flow_smoke_entry(&http_client, entry);
     }
     for (name, path) in [
         (
@@ -496,14 +522,15 @@ fn flow_smoke_all_registered_flows_via_controller() {
     }
 }
 
-/// Lists catalog entry names that the integration script excludes from this run.
-fn read_excluded_flow_smoke_entries() -> Vec<String> {
-    std::env::var("DEX_EXAMPLES_EXCLUDED_FLOW_SMOKE_ENTRIES")
-        .unwrap_or_default()
-        .split(',')
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .collect()
+fn run_flow_smoke_entry(http_client: &FlowSmokeHttpClient, entry: &FlowSmokeEntry) {
+    let result = http_client.trigger_get(entry.path, &entry.query);
+    assert!(
+        !result.flow_id.is_empty(),
+        "{}: controller response did not include flowID",
+        entry.name
+    );
+    assert_flow_smoke_start_step(entry, &result.flow_id, &result.run_id);
+    assert_flow_smoke_no_unexpected_failures(entry, &result.flow_id, &result.run_id);
 }
 
 fn available_worker_port() -> u16 {

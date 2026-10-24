@@ -147,46 +147,11 @@ if ! $dex_ready; then
   exit 1
 fi
 
-# Each entry is "<test or flow smoke entry name>|<unsupported feature>".
-server_zd_excluded_tests=(
-  "money_transfer_completes_with_released_sdk|failure policies"
-  "order_processing_happy_path|failure policies"
-  "order_processing_reminder_then_ship|failure policies"
-  "order_processing_ship_failure_refunds|failure policies"
-  "failure_recovery_retries_and_compensates|failure policies"
-  "polling_streams_job_progress_and_completes_with_job_result|failure policies"
-)
-server_zd_excluded_flow_smoke_entries=(
-  "products/money-transfer|failure policies"
-  "products/order-processing|failure policies"
-  "patterns/polling|failure policies"
-  "patterns/entity-store|Attribute Store sync"
-  "patterns/manual-recovery|failure policies"
-  "patterns/recovery|failure policies"
-  "primitives/step/options-override|failure policies"
-)
-integ_test_args=()
-excluded_flow_smoke_entries=""
-if [[ "$DEX_INTEG_ENGINE" == zd ]]; then
-  for exclusion in "${server_zd_excluded_tests[@]}"; do
-    name="${exclusion%%|*}"
-    echo "Excluded test ${name}: server-zd does not support ${exclusion#*|}"
-    integ_test_args+=(--skip "$name")
-  done
-  for exclusion in "${server_zd_excluded_flow_smoke_entries[@]}"; do
-    name="${exclusion%%|*}"
-    echo "Excluded flow smoke entry ${name}: server-zd does not support ${exclusion#*|}"
-    excluded_flow_smoke_entries+="${excluded_flow_smoke_entries:+,}${name}"
-  done
-fi
-
+# The Makefile excludes the samples server-zd does not support when DEX_INTEG_ENGINE=zd.
 cd "$script_dir"
 export DEXCLI_PATH="$binary_dir/dexcli"
-DEX_SERVER_ADDRESS="$dex_address" \
-  make integTests INTEG_TEST_ARGS="--exact ${integ_test_args[*]:-}"
-DEX_EXAMPLES_EXCLUDED_FLOW_SMOKE_ENTRIES="$excluded_flow_smoke_entries" \
-  DEX_SERVER_ADDRESS="$dex_address" \
-  make flowSmokeTests
+DEX_SERVER_ADDRESS="$dex_address" make integTests
+DEX_SERVER_ADDRESS="$dex_address" make flowSmokeTests
 
 if $keep_running; then
   echo ""

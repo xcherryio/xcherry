@@ -125,10 +125,13 @@ Deal DSL, and Failure Recovery Flows through the published Rust SDK.
 Set `DEX_EXAMPLES_WORKER_MODE=pull` to run the same tests with pull Workers.
 Set `DEX_INTEG_ENGINE=zd` to run them against server-zd. That mode defaults to
 pull Workers, does not start the entity store, and skips samples that use
-failure policies or Attribute Store sync. The script excludes those tests and
-flow smoke entries from the run and prints each one with the reason
-`server-zd does not support <feature>`. Set `DEX_SERVER_ZD_BINARY` to reuse a
-built `dex-server-zd`.
+failure policies or Attribute Store sync. `make integTests` and
+`make flowSmokeTests` filter those tests out by exact name, so `cargo test`
+reports them as filtered out, and print each one with the reason
+`server-zd does not support <feature>`. Flow smoke entries that server-zd
+rejects run as their own tests so they can be filtered. `make test` runs
+`check-server-zd-exclusions.sh`, which verifies the filter. Set
+`DEX_SERVER_ZD_BINARY` to reuse a built `dex-server-zd`.
 
 The Go examples support `./run-e2e-tests.sh --keep-running` to leave Dex running
 after E2E tests for manual HTTP exploration.

@@ -91,7 +91,8 @@ class SyncExampleApp:
             ),
         )
         self._worker_thread: threading.Thread | None = None
-        self._is_closed = False
+        self._is_worker_closed = False
+        self._is_blob_cache_closed = False
 
     @property
     def client(self) -> Client:
@@ -131,21 +132,46 @@ class SyncExampleApp:
             raise
 
     def close(self) -> None:
-        """Closes the Client, Worker, Worker thread, and BlobCache once."""
-        if self._is_closed:
-            return
-        self._is_closed = True
+        """Closes the Client, Worker, Worker thread, and BlobCache.
+
+        Every close step runs even when an earlier step fails. A later call
+        retries only the steps that have not completed.
+
+        Raises:
+            Exception: The first failure from a close step.
+        """
+        close_errors: list[Exception] = []
         if self._client is not None:
-            self._client.close()
-            self._client = None
-        self.worker.close()
+            try:
+                self._client.close()
+                self._client = None
+            except Exception as error:
+                close_errors.append(error)
+        if not self._is_worker_closed:
+            try:
+                self.worker.close()
+                self._is_worker_closed = True
+            except Exception as error:
+                close_errors.append(error)
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=10)
             self._worker_thread = None
-        self.blob_cache.close()
-
+        if not self._is_blob_cache_closed:
+            try:
+                self.blob_cache.close()
+                self._is_blob_cache_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        _raise_first_close_error(close_errors)
 
 _logger = logging.getLogger(__name__)
+
+
+def _raise_first_close_error(close_errors: list[Exception]) -> None:
+    for error in close_errors[1:]:
+        _logger.error("another close step failed", exc_info=error)
+    if close_errors:
+        raise close_errors[0]
 
 
 def _new_worker_options(config: SyncExamplesConfig) -> WorkerOptions:

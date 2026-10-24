@@ -287,7 +287,9 @@ class ExampleApp:
             ),
         )
         self._worker_task: asyncio.Task[None] | None = None
-        self._is_closed = False
+        self._is_worker_closed = False
+        self._is_mcp_registry_closed = False
+        self._is_blob_cache_closed = False
 
     @property
     def client(self) -> AsyncClient:
@@ -323,25 +325,61 @@ class ExampleApp:
             raise
 
     async def close(self) -> None:
-        """Closes the Client, Worker, MCP registry, and BlobCache once."""
-        if self._is_closed:
-            return
-        self._is_closed = True
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
-        await self.worker.close()
-        if self._worker_task is not None:
-            try:
-                await asyncio.wait_for(self._worker_task, timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self._worker_task.cancel()
-            self._worker_task = None
-        await self.mcp_registry.close()
-        self.blob_cache.close()
+        """Closes the Client, Worker, Worker task, MCP registry, and BlobCache.
 
+        Every close step runs even when an earlier step fails. A later call
+        retries only the steps that have not completed. A failed Worker task is
+        logged rather than raised.
+
+        Raises:
+            Exception: The first failure from a close step.
+        """
+        close_errors: list[Exception] = []
+        if self._client is not None:
+            try:
+                await self._client.close()
+                self._client = None
+            except Exception as error:
+                close_errors.append(error)
+        if not self._is_worker_closed:
+            try:
+                await self.worker.close()
+                self._is_worker_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        if self._worker_task is not None:
+            await self._await_closed_worker_task(self._worker_task)
+            self._worker_task = None
+        if not self._is_mcp_registry_closed:
+            try:
+                await self.mcp_registry.close()
+                self._is_mcp_registry_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        if not self._is_blob_cache_closed:
+            try:
+                self.blob_cache.close()
+                self._is_blob_cache_closed = True
+            except Exception as error:
+                close_errors.append(error)
+        _raise_first_close_error(close_errors)
+
+    async def _await_closed_worker_task(self, worker_task: asyncio.Task[None]) -> None:
+        try:
+            await asyncio.wait_for(worker_task, timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            worker_task.cancel()
+        except Exception:
+            _logger.exception("Worker task failed")
 
 _logger = logging.getLogger(__name__)
+
+
+def _raise_first_close_error(close_errors: list[Exception]) -> None:
+    for error in close_errors[1:]:
+        _logger.error("another close step failed", exc_info=error)
+    if close_errors:
+        raise close_errors[0]
 
 
 def _new_worker_options(config: ExamplesConfig) -> WorkerOptions:
