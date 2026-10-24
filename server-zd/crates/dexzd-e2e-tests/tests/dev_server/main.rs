@@ -10,6 +10,7 @@
 
 mod harness;
 mod value_hydration;
+mod value_reference_dispatch;
 mod wait_deadlines;
 
 use std::collections::BTreeMap;

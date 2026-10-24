@@ -3665,8 +3665,8 @@ github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/substrait-io/substrait-go v0.4.2/go.mod h1:qhpnLmrcvAnlZsUyPXZRqldiHapPTXC3t7xFgDi3aQg=
-github.com/superdurable/dex/blob-cache-go v0.1.1 h1:cswtUCelKqhYA+kuSKdk0u3us3QmDA2hTh1Fs3kLGJE=
-github.com/superdurable/dex/blob-cache-go v0.1.1/go.mod h1:Atepb7+sztvDCztVKmlvEKCSKFCkHKtDhoFYjaFmtEw=
+github.com/superdurable/dex/blob-cache-go v0.1.2 h1:vHwmUZl59GkpTdrcwouj47rnKdx45ETfZdtfxn/vzSM=
+github.com/superdurable/dex/blob-cache-go v0.1.2/go.mod h1:Atepb7+sztvDCztVKmlvEKCSKFCkHKtDhoFYjaFmtEw=
 github.com/superdurable/temporal-sdk-go v1.47.1-superdurable.3 h1:DbV21FY6SW6i+OcfbGnBgyzzJCqHljEqKASvIDbd61I=
 github.com/superdurable/temporal-sdk-go v1.47.1-superdurable.3/go.mod h1:man3WG0HjtUkJVJn2TR82mFEK0F9PfDAZl3W1m4vkws=
 github.com/temporalio/ringpop-go v0.1.0 h1:VSyNcMOLYOnXwTPp2Yevhl5vqhMDU3M6iqpoL7qkrQI=

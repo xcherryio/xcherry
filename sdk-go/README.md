@@ -822,6 +822,23 @@ The SDK generates request IDs for StartFlow and InvokeRPC. A
 separate calls. Durable wait request IDs are optional overrides of server-derived
 stable IDs.
 
+A stable request ID alone does not make a StartFlow retry succeed. A retried
+StartFlow returns the existing run only when `AlreadyStarted.IgnoreError` is
+true and the request ID matches the one that started that run. Without
+`IgnoreError`, the retry returns `FlowAlreadyStartedError` even when the first
+attempt created the Flow. The match applies only when the ID reuse policy
+rejects the start; a policy that permits another run starts a new one. Set both
+options on every attempt of one logical start:
+
+```go
+flowID := "order-" + orderID
+requestID := "start-order-" + orderID
+runID, err := client.StartFlow(ctx, orderFlow, flowID, input, dex.StartFlowOptions{
+	AlreadyStarted: &dex.AlreadyStartedOptions{IgnoreError: true},
+	RequestID:      &requestID,
+})
+```
+
 Client is safe for concurrent calls. `Close` is idempotent and closes only its
 owned gRPC connection. Calls after Close return a local error.
 
