@@ -259,7 +259,7 @@ pub(crate) fn apply_flow_stop(
     }
     let stop_type = StopType::try_from(request.stop_type).unwrap_or(StopType::Unspecified);
     let closing = match stop_type {
-        StopType::Unspecified | StopType::Cancel => FlowClosing::canceled(request.reason.clone()),
+        StopType::Unspecified | StopType::Cancel => FlowClosing::canceled(),
         StopType::Terminate => FlowClosing::terminated(request.reason.clone()),
         StopType::Fail => {
             let reason = if request.reason.is_empty() {
