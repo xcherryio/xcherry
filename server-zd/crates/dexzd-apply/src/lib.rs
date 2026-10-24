@@ -19,6 +19,7 @@ mod apply_outcome;
 mod command_handlers;
 mod cross_flow;
 mod projections;
+pub mod read_model;
 mod state_access;
 mod steps;
 mod values;
