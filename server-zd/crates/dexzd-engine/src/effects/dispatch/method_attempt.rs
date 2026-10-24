@@ -14,6 +14,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::row_keys::hard_delete_current_key;
 use dexzd_keyspace::{ColumnFamily, TenantId};
 use dexzd_protocol::dex::{
@@ -202,12 +203,13 @@ impl MethodAttempt {
     /// Returns the state, `None` when the attempt is no longer running with this dispatch ID,
     /// or the read's error.
     async fn read_attempt_state(&self) -> Result<Option<MethodAttemptState>, EffectError> {
-        let reader = self.context.runtime.flow_state_reader(&self.flow, true)?;
         let run = self.run;
         let key = self.key.clone();
         let task_id = self.task_id.clone();
-        self.read_off_task(move || read_method_attempt_state(reader.as_ref(), run, &key, &task_id))
-            .await
+        self.read_off_task(true, move |reader| {
+            read_method_attempt_state(reader, run, &key, &task_id)
+        })
+        .await
     }
 
     /// Runs synchronous store reads on the blocking pool.
@@ -216,10 +218,29 @@ impl MethodAttempt {
     /// the read ran. A panic in `read` resumes on this task.
     async fn read_off_task<T: Send + 'static>(
         &self,
-        read: impl FnOnce() -> Result<T, EffectError> + Send + 'static,
+        include_speculative: bool,
+        read: impl FnOnce(&dyn FlowStateReader) -> Result<T, EffectError> + Send + 'static,
     ) -> Result<T, EffectError> {
+        // The effect tracker owns the read and its slot until the store call returns.
+        let read_slot = Arc::clone(&self.context.blocking_read_slots)
+            .acquire_owned()
+            .await
+            .expect("the blocking read slots are never closed");
+        let reader = self
+            .context
+            .runtime
+            .flow_state_reader(&self.flow, include_speculative)?;
+        let read_cancel = self.cancel.child_token();
+        // When the attempt stops waiting, a read that has not started yet skips the store.
+        let _cancel_unstarted_read = read_cancel.clone().drop_guard();
         // Dropping the handle at the deadline detaches the read; it ends with its store call.
-        let handle = tokio::task::spawn_blocking(read);
+        let handle = self.context.tracker.spawn_blocking(move || {
+            let _read_slot = read_slot;
+            if read_cancel.is_cancelled() {
+                return Err(EffectError::Stopped);
+            }
+            read(reader.as_ref())
+        });
         match handle.await {
             Ok(result) => result,
             Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
@@ -318,8 +339,7 @@ impl MethodAttempt {
         attribute_key: &str,
     ) -> Result<Option<String>, EffectError> {
         let key = hard_delete_current_key(self.run.flow_hash, self.run.run_id, attribute_key);
-        let reader = self.context.runtime.flow_state_reader(&self.flow, false)?;
-        self.read_off_task(move || {
+        self.read_off_task(false, move |reader| {
             let Some(bytes) = reader.get(ColumnFamily::Flow, &key)? else {
                 return Ok(None);
             };

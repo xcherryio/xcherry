@@ -421,6 +421,10 @@ impl StateReadGate {
         self.state.lock().expect("lock").held_reads
     }
 
+    pub(super) fn open_reader_count(&self) -> usize {
+        self.state.lock().expect("lock").open_readers
+    }
+
     /// Blocks the calling thread, in real time, until `count` reads are held.
     pub(super) fn wait_for_held_reads(&self, count: usize) {
         let state = self.state.lock().expect("lock");

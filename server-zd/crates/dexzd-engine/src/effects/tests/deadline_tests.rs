@@ -9,6 +9,8 @@
 //! An expired deadline wins over a Worker event or state read ready at once, and outlasts a
 //! stalled read.
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -18,8 +20,10 @@ use dexzd_protocol::dexzd::v1::{StepAttemptFailureKind, flow_command};
 use tokio::time::Instant;
 
 use super::{
-    EffectHarness, FakeDispatch, is_error_reply, is_method_completed, settings, start_request,
+    DurableState, EffectHarness, FakeDispatch, is_error_reply, is_method_completed, settings,
+    start_request,
 };
+use crate::effects::EffectsConfig;
 
 /// Enough Flows that an unbiased choice between ready branches picks the deadline every time
 /// only with probability 2^-32.
@@ -254,5 +258,87 @@ async fn a_first_state_read_ready_with_the_fired_method_timer_fails_with_method_
     assert_the_first_attempt_timed_out_before_dispatch(&harness);
 
     assert_only_the_retry_is_dispatched(&harness).await;
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn effect_shutdown_waits_for_a_state_read_abandoned_at_the_method_deadline() {
+    let harness = EffectHarness::new();
+    harness.rebuild_all_partitions().await;
+    let held_reads = start_with_a_held_state_read(&harness).await;
+    tokio::time::advance(Duration::from_millis(30_100)).await;
+    harness.yield_to_tasks().await;
+    assert_the_first_attempt_timed_out_before_dispatch(&harness);
+    assert_eq!(harness.runtime.state_read_gate.held_reads(), 1);
+
+    let gate = Arc::clone(&harness.runtime.state_read_gate);
+    let shutdown = tokio::spawn(harness.shutdown());
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown waits for the abandoned read"
+    );
+    held_reads.open_and_wait_for_reads();
+    shutdown.await.expect("shutdown completes");
+    assert_eq!(gate.open_reader_count(), 0, "no reader outlives shutdown");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_without_a_free_blocking_read_slot_times_out_without_reading() {
+    let config = EffectsConfig {
+        max_blocking_state_reads: 1,
+        ..EffectsConfig::default()
+    };
+    let harness = EffectHarness::with_config(DurableState::new(), config);
+    harness.rebuild_all_partitions().await;
+    let held_reads = start_with_a_held_state_read(&harness).await;
+    let mut request = start_request("order-2");
+    request.step_options = Some(StepOptions {
+        wait_for_timeout_seconds: 5,
+        ..StepOptions::default()
+    });
+    harness.start_flow(request, settings());
+    harness.yield_to_tasks().await;
+    assert_eq!(
+        harness.runtime.state_read_gate.open_reader_count(),
+        1,
+        "the second attempt opens no reader while the stalled read holds the only slot"
+    );
+
+    // A held read stops paused time from advancing by itself.
+    tokio::time::advance(Duration::from_millis(5_100)).await;
+    harness.yield_to_tasks().await;
+    let failures: Vec<_> = harness
+        .runtime
+        .commands_matching(|command| matches!(command, flow_command::Command::StepAttemptFailed(_)))
+        .into_iter()
+        .filter_map(|recorded| match recorded.command.command {
+            Some(flow_command::Command::StepAttemptFailed(failure)) => {
+                Some((recorded.command.flow_id, failure.kind))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        failures,
+        vec![(
+            "order-2".to_owned(),
+            StepAttemptFailureKind::MethodTimeout as i32
+        )]
+    );
+    assert_eq!(harness.runtime.state_read_gate.held_reads(), 1);
+
+    held_reads.open_and_wait_for_reads();
+    let mut dispatched_flow_ids = BTreeSet::new();
+    for _ in 0..2 {
+        let dispatch = harness.dispatcher.next_dispatch().await;
+        dispatched_flow_ids.insert(dispatch.context().flow_id);
+    }
+    assert_eq!(
+        dispatched_flow_ids,
+        BTreeSet::from(["order-1".to_owned(), "order-2".to_owned()])
+    );
     harness.shutdown().await;
 }
