@@ -229,7 +229,15 @@ async fn paradedb_matches_builtin_evaluator() {
         "tags != 'charge'",
         "tags IS NOT NULL",
         "number >= 5",
+        "number = '7'",
+        "number IN ('2', 7)",
+        "number BETWEEN '3' AND '+6'",
+        "number != '5'",
         "double < 3.0",
+        "double = '1.5'",
+        "double IN ('1.5', 3.5)",
+        "double BETWEEN '2' AND '3.0'",
+        "double > '2E0'",
         "flag = true",
         "datetime >= '1970-01-01T00:00:02Z'",
         "datetime IS NULL",
@@ -264,6 +272,28 @@ async fn paradedb_matches_builtin_evaluator() {
             .await
             .expect(input);
         let actual_ids: Vec<String> = actual
+            .iter()
+            .map(|row| row.get::<_, String>("run_id"))
+            .collect();
+        assert_eq!(actual_ids, expected_ids, "{input}");
+    }
+
+    for (input, expected_ids) in [
+        ("number = '7'", vec!["r2"]),
+        ("number IN ('2', 7)", vec!["r1", "r2"]),
+        ("number BETWEEN '3' AND '+6'", vec!["r3"]),
+        ("double = '1.5'", vec!["r1"]),
+        ("double IN ('1.5', 3.5)", vec!["r1", "r2"]),
+        ("double BETWEEN '2' AND '3.0'", vec!["r3"]),
+        ("double > '2E0'", vec!["r2", "r3"]),
+    ] {
+        let query = parse_and_check(input, &registry).expect("quoted numeric query");
+        let statement = translate_query(&query, &parity_tenant_column, 100, None)
+            .expect("translate quoted numeric query");
+        let actual_ids: Vec<String> = client
+            .query(&statement.sql, &statement.parameter_refs())
+            .await
+            .expect(input)
             .iter()
             .map(|row| row.get::<_, String>("run_id"))
             .collect();

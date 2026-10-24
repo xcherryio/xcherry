@@ -489,6 +489,67 @@ async fn applies_compatibility_and_attribute_values() {
 }
 
 #[tokio::test]
+async fn compares_quoted_numeric_literals_as_numbers() {
+    let mut state = MemoryState::default();
+    for (ordinal, amount, quantity) in [(1, 0.01, 3), (2, 2.5, 4)] {
+        let mut flow = record(7, ordinal, "Checkout", FlowStatus::Running, 1, 0);
+        flow.attributes = vec![
+            SearchAttributeValue {
+                index_key: "Amount".into(),
+                index_type: IndexType::Double.into(),
+                value: Some(dex::Value {
+                    kind: Some(dex::value::Kind::DoubleValue(amount)),
+                }),
+            },
+            SearchAttributeValue {
+                index_key: "Quantity".into(),
+                index_type: IndexType::Int.into(),
+                value: Some(dex::Value {
+                    kind: Some(dex::value::Kind::IntValue(quantity)),
+                }),
+            },
+        ];
+        state.insert(u16::from(ordinal), 7, ordinal, flow);
+    }
+    let backend =
+        BuiltinSearchBackend::new(MemoryViewProvider::new(Arc::new(state)), 3).expect("backend");
+    let mut fields = fields();
+    fields.insert("Amount", IndexType::Double);
+    fields.insert("Quantity", IndexType::Int);
+    for (query, expected_flow_ids) in [
+        ("Amount = '0.01'", vec!["flow-1"]),
+        ("Amount = \"2.5\"", vec!["flow-2"]),
+        ("Amount > '1e-1'", vec!["flow-2"]),
+        ("Amount IN ('0.010', 2.5)", vec!["flow-1", "flow-2"]),
+        ("Amount BETWEEN '0' AND '1'", vec!["flow-1"]),
+        ("Quantity = '4'", vec!["flow-2"]),
+        ("Quantity NOT IN ('4')", vec!["flow-1"]),
+        ("Quantity BETWEEN '+3' AND 3", vec!["flow-1"]),
+    ] {
+        let page = backend
+            .search(request(query, None, 10, &fields))
+            .await
+            .expect(query);
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|entry| entry.flow_id.as_str())
+                .collect::<Vec<_>>(),
+            expected_flow_ids,
+            "{query}"
+        );
+    }
+    let error = backend
+        .search(request("Amount = 'cheap'", None, 10, &fields))
+        .await
+        .expect_err("non-numeric DOUBLE literal");
+    assert!(
+        matches!(&error, SearchError::InvalidArgument(message) if message.contains("invalid DOUBLE literal for Amount")),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn random_documents_with_sort_ties_match_the_shared_evaluator() {
     let mut state = MemoryState::default();
     let mut records = Vec::new();

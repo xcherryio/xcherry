@@ -6,6 +6,8 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use std::num::{IntErrorKind, ParseIntError};
+
 use dexzd_protocol::dex::IndexType;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -289,24 +291,14 @@ impl Parser<'_> {
             (TokenKind::Number(value), IndexType::Int)
                 if !value.contains('.') && !value.contains('e') && !value.contains('E') =>
             {
-                Literal::Int(value.parse().map_err(|_| {
-                    QueryError::new(
-                        token.offset,
-                        format!("INT literal out of range for {field}"),
-                    )
-                })?)
+                Literal::Int(parse_int_literal(value, field, token.offset)?)
             }
-            (TokenKind::Number(value), IndexType::Double) => {
-                let number: f64 = value.parse().map_err(|_| {
-                    QueryError::new(token.offset, format!("invalid DOUBLE literal for {field}"))
-                })?;
-                if !number.is_finite() {
-                    return Err(QueryError::new(
-                        token.offset,
-                        format!("DOUBLE literal out of range for {field}"),
-                    ));
-                }
-                Literal::Double(number)
+            // Temporal visibility accepts quoted numeric literals for INT and DOUBLE fields.
+            (TokenKind::String(value), IndexType::Int) => {
+                Literal::Int(parse_int_literal(value, field, token.offset)?)
+            }
+            (TokenKind::Number(value) | TokenKind::String(value), IndexType::Double) => {
+                Literal::Double(parse_double_literal(value, field, token.offset)?)
             }
             (TokenKind::Identifier(value) | TokenKind::String(value), IndexType::Bool)
                 if value.eq_ignore_ascii_case("true") =>
@@ -407,6 +399,41 @@ impl Parser<'_> {
     }
     fn describe_current(&self) -> String {
         describe(&self.current().kind)
+    }
+}
+
+fn parse_int_literal(value: &str, field: &str, offset: usize) -> Result<i64, QueryError> {
+    value
+        .parse()
+        .map_err(|error: ParseIntError| match error.kind() {
+            IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
+                QueryError::new(offset, format!("INT literal out of range for {field}"))
+            }
+            _ => QueryError::new(
+                offset,
+                format!("invalid INT literal for {field}: {value:?} is not a whole number"),
+            ),
+        })
+}
+
+fn parse_double_literal(value: &str, field: &str, offset: usize) -> Result<f64, QueryError> {
+    let invalid = || {
+        QueryError::new(
+            offset,
+            format!("invalid DOUBLE literal for {field}: {value:?} is not a decimal number"),
+        )
+    };
+    let number: f64 = value.parse().map_err(|_| invalid())?;
+    if number.is_finite() {
+        Ok(number)
+    } else if value.bytes().any(|byte| byte.is_ascii_digit()) {
+        Err(QueryError::new(
+            offset,
+            format!("DOUBLE literal out of range for {field}"),
+        ))
+    } else {
+        // Rust parses NaN and infinity names, which no DOUBLE value can match.
+        Err(invalid())
     }
 }
 
