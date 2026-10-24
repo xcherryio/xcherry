@@ -11,6 +11,7 @@
 #![cfg(unix)]
 
 mod harness;
+mod robustness;
 
 use std::time::Duration;
 
