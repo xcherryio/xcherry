@@ -262,6 +262,8 @@ message StepExecutionRecord {
   // True for the Flow timeout handler `sys:timeout_handler-1`.
   bool is_timeout_handler = 14;
   uint64 completed_seq = 15;
+  // Retained through Execute until the Step finishes or is canceled.
+  dex.PullRouting wait_for_pull_routing = 16;
 }
 
 // Phase of one logical method call.

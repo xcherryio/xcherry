@@ -820,10 +820,12 @@ fn flow_timeout_fails_with_the_default_policy() {
     }));
     let record = harness.run_record();
     assert_eq!(record.status, FlowStatus::Failed as i32);
+    let close = record.close.unwrap();
     assert_eq!(
-        record.close.unwrap().error_type,
+        close.error_type,
         dexzd_protocol::dex::FlowErrorType::FlowTimeout as i32
     );
+    assert_eq!(close.error_message, "Flow timed out after 30 seconds");
 }
 
 #[test]
@@ -2390,5 +2392,98 @@ fn canceling_sibling_steps_spares_the_same_type_under_another_parent() {
         harness.step_execution("WaitingStep-2").phase,
         StepExecutionPhase::Canceled as i32,
         "the same Step type under SecondParentStep-1 keeps running"
+    );
+}
+
+fn flow_closed_messages(outcome: &ApplyOutcome) -> Vec<String> {
+    history_events(outcome)
+        .into_iter()
+        .filter_map(|payload| match payload {
+            flow_history_event::Payload::FlowClosed(closed) => Some(closed.error_message),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_canceled_flow_reports_no_message_like_the_go_server() {
+    let mut harness = Harness::new("order-1");
+    let mut request = start_request("request-1");
+    request.flow_timeout_seconds = 30;
+    harness.start_with_timeout_policy(request, FlowTimeoutPolicy::Cancel);
+
+    let fired = harness.apply(Command::TimersFired(TimersFiredCommand {
+        timers: vec![TimerId {
+            run_attempt: 1,
+            kind: Some(timer_id::Kind::FlowTimeout(FlowTimeoutTimerId {})),
+        }],
+    }));
+
+    let record = harness.run_record();
+    assert_eq!(record.status, FlowStatus::Canceled as i32);
+    assert_eq!(record.close.expect("closed").error_message, "");
+    assert_eq!(flow_closed_messages(&fired), vec![String::new()]);
+
+    let mut stopped_harness = Harness::new("order-2");
+    stopped_harness.start(start_request("request-1"));
+    let stopped = stopped_harness.apply(Command::FlowStop(FlowStopCommand {
+        request: Some(StopFlowRequest {
+            stop_type: StopType::Cancel as i32,
+            reason: "bye".to_owned(),
+            ..StopFlowRequest::default()
+        }),
+    }));
+    assert_eq!(
+        stopped_harness
+            .run_record()
+            .close
+            .expect("closed")
+            .error_message,
+        ""
+    );
+    assert_eq!(flow_closed_messages(&stopped), vec![String::new()]);
+}
+
+#[test]
+fn a_terminated_flow_keeps_the_reason_only_in_history() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+
+    let stopped = harness.apply(Command::FlowStop(FlowStopCommand {
+        request: Some(StopFlowRequest {
+            stop_type: StopType::Terminate as i32,
+            reason: "terminated".to_owned(),
+            ..StopFlowRequest::default()
+        }),
+    }));
+
+    let record = harness.run_record();
+    assert_eq!(record.status, FlowStatus::Terminated as i32);
+    assert_eq!(record.close.expect("closed").error_message, "");
+    assert_eq!(
+        flow_closed_messages(&stopped),
+        vec!["terminated".to_owned()]
+    );
+}
+
+#[test]
+fn an_empty_termination_reason_uses_the_go_default_in_history() {
+    let mut harness = Harness::new("order-1");
+    harness.start(start_request("request-1"));
+
+    let stopped = harness.apply(Command::FlowStop(FlowStopCommand {
+        request: Some(StopFlowRequest {
+            stop_type: StopType::Terminate as i32,
+            ..StopFlowRequest::default()
+        }),
+    }));
+
+    assert_eq!(
+        flow_closed_messages(&stopped),
+        vec!["Force termiantion from user".to_owned()]
+    );
+    assert_eq!(
+        harness.run_record().close.expect("closed").error_message,
+        ""
     );
 }
