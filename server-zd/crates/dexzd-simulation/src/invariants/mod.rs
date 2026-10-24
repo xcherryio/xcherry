@@ -15,12 +15,33 @@ mod value_invariants;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use dexzd_keyspace::{RunId, ValueId};
+use dexzd_keyspace::{FlowHash, RunId, ValueId};
 
+use crate::memory_state::MemoryFlowState;
 use crate::state_view::FlowView;
 
 pub use lock_invariants::check_fresh_snapshot;
 pub(crate) use value_invariants::remember_window_points;
+
+pub(crate) fn check_window_value_content(
+    flow_id: &str,
+    view: &FlowView,
+    memory: &CheckerMemory,
+    state: &MemoryFlowState,
+    flow_hash: FlowHash,
+) -> Result<(), InvariantViolation> {
+    for (run_id, run) in view.runs.iter().filter(|(_, run)| run.is_complete) {
+        let context = RunContext { flow_id, run_id };
+        value_invariants::check_window_value_content(
+            &context,
+            run,
+            memory.window_points.get(run_id),
+            state,
+            flow_hash,
+        )?;
+    }
+    Ok(())
+}
 
 /// A broken invariant: a stable name for grouping and a description of the evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]

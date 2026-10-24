@@ -21,7 +21,8 @@ use prost::Message;
 
 use crate::invalid_client_inputs::{check_invalid_client_input_rejected, invalid_client_input};
 use crate::invariants::{
-    CheckerMemory, InvariantViolation, check_flow, check_fresh_snapshot, remember_window_points,
+    CheckerMemory, InvariantViolation, check_flow, check_fresh_snapshot,
+    check_window_value_content, remember_window_points,
 };
 use crate::memory_state::MemoryFlowState;
 use crate::state_view::{FlowView, RunSelection};
@@ -143,6 +144,13 @@ impl ApplyChecker {
             self.check_command_effects(command, &outcome, &view)?;
         }
         check_flow(&command.flow_id, &view, &self.memory)?;
+        check_window_value_content(
+            &command.flow_id,
+            &view,
+            &self.memory,
+            &self.state,
+            context.flow_hash,
+        )?;
         Ok(outcome)
     }
 
