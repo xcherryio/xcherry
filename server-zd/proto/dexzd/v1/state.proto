@@ -134,6 +134,8 @@ message RunRecord {
   uint64 pruned_semantic_event_count = 30;
   // Size of the latest checkpoint's rows; the checkpoint rule's attempt state size.
   uint64 last_checkpoint_state_bytes = 31;
+  // Largest timestamp of a pruned semantic point; earlier reset times target a pruned point.
+  int64 last_pruned_semantic_timestamp_micros = 55;
 }
 
 // Close details of a closed attempt.

@@ -65,6 +65,9 @@ pub(crate) fn advance_window(
     record.max_pruned_external_input_seq = record
         .max_pruned_external_input_seq
         .max(pruned.max_external_input_seq);
+    record.last_pruned_semantic_timestamp_micros = record
+        .last_pruned_semantic_timestamp_micros
+        .max(pruned.max_semantic_timestamp_micros);
     delete_unneeded_history(transaction, cursor, pruned.window_start_attempt)?;
     crate::values::prune_garbage(transaction, cursor, pruned.window_start_seq)?;
     Ok(true)
@@ -74,6 +77,7 @@ struct PrunedChunk {
     window_start_seq: u64,
     window_start_attempt: u32,
     max_external_input_seq: u64,
+    max_semantic_timestamp_micros: i64,
 }
 
 /// Skips `chunk_events` semantic records from W; the next semantic record is the new W.
@@ -84,6 +88,7 @@ fn find_new_window_start(
 ) -> Result<Option<PrunedChunk>, ApplyError> {
     let mut remaining = chunk_events;
     let mut max_external_input_seq = 0;
+    let mut max_semantic_timestamp_micros = i64::MIN;
     let mut next_seq = cursor.record.window_start_seq;
     loop {
         let page = history_page(transaction, cursor.rows, next_seq)?;
@@ -98,9 +103,12 @@ fn find_new_window_start(
                         window_start_seq: record.seq,
                         window_start_attempt: record.attempt,
                         max_external_input_seq,
+                        max_semantic_timestamp_micros,
                     }));
                 }
                 remaining -= 1;
+                max_semantic_timestamp_micros =
+                    max_semantic_timestamp_micros.max(record.timestamp_micros);
             }
             if record.is_external_input {
                 max_external_input_seq = max_external_input_seq.max(record.seq);

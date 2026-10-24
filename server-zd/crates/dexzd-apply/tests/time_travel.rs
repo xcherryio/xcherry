@@ -1415,12 +1415,14 @@ fn only_beginning_targets_genesis_outside_the_window() {
     let genesis_time = harness.history_record(1).unwrap().timestamp_micros;
     harness.start_attempt("ChargeStep-1", StepMethod::WaitFor, 1);
     harness.complete_wait_for("ChargeStep-1");
+    let last_pruned_time = harness.history_record(3).unwrap().timestamp_micros;
     for index in 0..5 {
         harness.set_attribute("status", &format!("v{index}"), "");
     }
     assert_eq!(harness.run_record().window_start_seq, 4);
     for request in [
         reset_to_time(genesis_time),
+        reset_to_time(last_pruned_time),
         ResetFlowRequest {
             step_type: "ChargeStep".to_owned(),
             ..reset(FlowResetType::StepType)
@@ -1444,7 +1446,13 @@ fn only_beginning_targets_genesis_outside_the_window() {
         );
         assert!(outcome.writes.is_empty());
     }
-    let (attempt, _) = harness.travel_to(reset(FlowResetType::Beginning));
+    // A time after the last pruned point targets W, the first point at or after it.
+    let (attempt, _) = harness.travel_to(reset_to_time(last_pruned_time + 1));
+    assert_eq!(harness.attempt_record(attempt).parent_seq, 4);
+    let (attempt, _) = harness.travel_to(ResetFlowRequest {
+        run_attempt: 1,
+        ..reset(FlowResetType::Beginning)
+    });
     assert_eq!(harness.attempt_record(attempt).parent_seq, 1);
 }
 
