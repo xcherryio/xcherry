@@ -128,6 +128,9 @@ impl ValueHydrator {
     }
 
     fn read_cache(&self, key: &BlobKey) -> SdkResult<Option<Value>> {
+        if key.is_hard_delete() {
+            return Ok(None);
+        }
         let payload = self.cache.get(&key.cache_key()).map_err(cache_error)?;
         let Some(payload) = payload else {
             return Ok(None);
@@ -150,6 +153,9 @@ impl ValueHydrator {
     }
 
     fn write_cache(&self, key: &BlobKey, value: &Value) -> SdkResult<()> {
+        if key.is_hard_delete() {
+            return Ok(());
+        }
         let payload = match value.kind.as_ref() {
             Some(value::Kind::ObjValue(object)) if key.object => object.encode_to_vec(),
             Some(value::Kind::StringValue(text)) if !key.object => text.as_bytes().to_vec(),
@@ -200,6 +206,10 @@ impl BlobKey {
 
     fn cache_key(&self) -> String {
         format!("{}:{}{}", self.flow_id.len(), self.flow_id, self.id)
+    }
+
+    fn is_hard_delete(&self) -> bool {
+        self.id.starts_with("hd/") || self.id.starts_with("hd1|")
     }
 
     fn validate_hydrated(&self, value: &Value) -> SdkResult<()> {
@@ -253,5 +263,57 @@ fn cache_error(error: impl std::fmt::Display) -> SdkError {
 fn mapping_error(error: impl std::fmt::Display) -> SdkError {
     SdkError::ValueMapping {
         message: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use dex_blob_cache::BlobCacheConfig;
+    use tonic::transport::Endpoint;
+
+    use super::*;
+    use crate::credential::CredentialInterceptor;
+
+    #[tokio::test]
+    async fn rewritten_hard_delete_attribute_bypasses_stale_cache() {
+        let directory = tempfile::tempdir().expect("cache directory");
+        let cache = Arc::new(
+            BlobCache::open(
+                BlobCacheConfig::new(directory.path(), 1 << 20, 0).expect("cache configuration"),
+            )
+            .expect("open cache"),
+        );
+        let channel = Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
+        let service = FlowServiceClient::new(CredentialChannel::new(
+            channel,
+            CredentialInterceptor::new(None),
+        ));
+        let hydrator = ValueHydrator::new(service, Arc::clone(&cache));
+
+        for locator in ["hd/attribute-object", "hd1|run-id|attribute-object"] {
+            let key = BlobKey {
+                flow_id: "flow-1".to_owned(),
+                id: locator.to_owned(),
+                object: false,
+            };
+            cache
+                .put(&key.cache_key(), b"original")
+                .expect("seed stale cache");
+            assert!(hydrator.read_cache(&key).expect("read cache").is_none());
+            let updated = Value {
+                kind: Some(value::Kind::StringValue("updated".to_owned())),
+            };
+            hydrator
+                .write_cache(&key, &updated)
+                .expect("skip cache write");
+            assert!(hydrator.read_cache(&key).expect("read cache").is_none());
+            assert_eq!(
+                cache.get(&key.cache_key()).expect("inspect cache"),
+                Some(b"original".to_vec())
+            );
+        }
+        cache.close().expect("close cache");
     }
 }
