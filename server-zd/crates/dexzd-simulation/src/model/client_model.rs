@@ -43,8 +43,8 @@ fn request_id(rng: &mut ChaCha8Rng, prefix: &str) -> String {
 
 pub(crate) fn run_settings() -> RunSettings {
     RunSettings {
-        history_window_semantic_events: 10_000,
-        history_prune_chunk_semantic_events: 1000,
+        history_window_semantic_events: 3,
+        history_prune_chunk_semantic_events: 2,
         max_retained_superseded_bytes: 256 << 20,
         retention_after_close_micros: 60 * SECOND,
         wire_inline_threshold_bytes: WIRE_INLINE_THRESHOLD_BYTES,

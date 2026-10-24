@@ -197,7 +197,7 @@ impl CommandGenerator {
                         proposals.push((weight, Proposal::StartAttempt(call())));
                     }
                     Ok(StepInvocationPhase::Running) => {
-                        proposals.push((10, Proposal::WorkerOutcome(call())));
+                        proposals.push((3, Proposal::WorkerOutcome(call())));
                         proposals.push((1, Proposal::StaleAttempt(call())));
                     }
                     _ => proposals.push((1, Proposal::StaleAttempt(call()))),

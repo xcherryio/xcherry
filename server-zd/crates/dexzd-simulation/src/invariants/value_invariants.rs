@@ -199,11 +199,20 @@ pub(crate) fn check_window_value_content(
             })?;
         for (value_id, size_bytes) in &point.references {
             let key = value_row_key(flow_hash, *context.run_id, RunTable::Value, *value_id);
-            let content_size = state
-                .row(ColumnFamily::Value, &key)
-                .and_then(|bytes| ValueRecord::decode(bytes).ok())
-                .and_then(|record| record.value)
-                .map(|value| u64::try_from(value.encoded_len()).unwrap_or(u64::MAX));
+            let content_size = match state.row(ColumnFamily::Value, &key) {
+                Some(bytes) => ValueRecord::decode(bytes)
+                    .map_err(|error| {
+                        InvariantViolation::new(
+                            WINDOW_REFERENCE,
+                            format!(
+                                "{context} semantic point {seq} value {value_id:?} cannot decode: {error}"
+                            ),
+                        )
+                    })?
+                    .value
+                    .map(|value| u64::try_from(value.encoded_len()).unwrap_or(u64::MAX)),
+                None => None,
+            };
             let birth_size = run.value_births.get(value_id).map(|birth| birth.size_bytes);
             if content_size != Some(*size_bytes) || birth_size != Some(*size_bytes) {
                 return Err(InvariantViolation::new(
@@ -504,6 +513,10 @@ mod retained_point_tests {
         };
         let key = value_row_key(flow_hash, run_id, RunTable::Value, value_id);
         let mut state = MemoryFlowState::default();
+        let missing_violation =
+            check_window_value_content(&context, &run, Some(&points), &state, flow_hash)
+                .expect_err("retained point must reject a missing value row");
+        assert_eq!(missing_violation.invariant, WINDOW_REFERENCE);
         for invalid_record in [
             ValueRecord { value: None },
             ValueRecord {
