@@ -15,12 +15,14 @@ dexzd-keyspace.workspace = true
 dexzd-object-store.workspace = true
 dexzd-protocol.workspace = true
 prost.workspace = true
+rand.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
