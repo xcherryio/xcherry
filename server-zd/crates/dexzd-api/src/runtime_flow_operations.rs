@@ -108,9 +108,21 @@ impl FlowOperations for FlowRuntimeRegistry {
         tenant_id: TenantId,
         request: LoadBlobsRequest,
     ) -> Result<LoadBlobsResponse, FlowOperationError> {
+        let entry_flow_ids: Vec<String> = request
+            .entries
+            .iter()
+            .map(|entry| entry.flow_id.clone())
+            .collect();
         FlowRuntimeRegistry::load_blobs(self, tenant_id, request)
             .await
-            .map_err(|error| flow_operation_error("", error))
+            .map_err(|error| {
+                // Entries span Flows; the NotFound error names the entry whose run is missing.
+                let missing_flow_id = entry_flow_ids
+                    .iter()
+                    .find(|flow_id| error == RuntimeError::flow_not_found(flow_id))
+                    .map_or("", String::as_str);
+                flow_operation_error(missing_flow_id, error)
+            })
     }
 
     async fn wait_for_flow(

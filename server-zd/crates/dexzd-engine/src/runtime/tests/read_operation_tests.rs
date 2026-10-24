@@ -6,19 +6,24 @@
 //
 // SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
+use dexzd_apply::FlowStateReader;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, ValueId, ValueReference, run_key};
 use dexzd_protocol::dex::{
-    ChannelMessage, EncodedObject, ErrorSubStatus, FlowStatus, GetAttributesRequest,
-    GetChannelMessagesRequest, GetFlowStateRequest, GetFlowSummaryRequest, GetHistoryEventsRequest,
-    LoadBlobRequestEntry, LoadBlobsRequest, PublishToChannelRequest, Value, value,
+    AttributeMatch, AttributeMatchOperator, ChannelMessage, EncodedObject, ErrorSubStatus,
+    FlowStatus, GetAttributesRequest, GetChannelMessagesRequest, GetFlowStateRequest,
+    GetFlowSummaryRequest, GetHistoryEventsRequest, InvokeRpcRequest, LoadBlobRequestEntry,
+    LoadBlobsRequest, PublishToChannelRequest, Value, WaitForAttributeRequest, WaitForFlowRequest,
+    WaitForHistoryEventRequest, WaitForStepCompletionRequest, value,
 };
 use dexzd_protocol::dexzd::v1::{
-    AttributeRecord, HardDeleteObjectReference, PermissionSetRecord, StoredValue, StoredValueId,
-    StoredValueReference, ValueRecord, stored_value,
+    AttributeRecord, HardDeleteObjectReference, PermissionSetRecord, RunRecord, StoredValue,
+    StoredValueId, StoredValueReference, ValueRecord, stored_value,
 };
 use prost::Message;
 
 use crate::CommitUrgency;
+use crate::effects::HardDeleteObjectOwner;
+use crate::runtime::RuntimeError;
 use crate::runtime::grpc_code;
 use crate::runtime::tests::fixtures::{
     TENANT, attributes_set_command, flow, set_attribute_request, start_flow, string_value,
@@ -161,14 +166,239 @@ async fn get_attributes_returns_sorted_committed_values_references_and_hard_dele
     assert_eq!(all.attributes[1].value, Some(string_value("classified")));
 
     harness.hard_delete_reader.values.lock().unwrap().clear();
-    let deleted = harness
+    let object_key = HardDeleteObjectOwner {
+        tenant_id: TENANT,
+        flow_hash: harness.registry.flow_context(&flow("order-1")).flow_hash,
+        run_id,
+    }
+    .object_key("object-1");
+    let error = harness
         .registry
         .get_attributes(TENANT, attributes_request("order-1", &["secret"], false))
         .await
-        .unwrap();
-    assert!(
-        deleted.attributes.is_empty(),
-        "a deleted hard-delete value is omitted"
+        .unwrap_err();
+    assert_eq!(error.grpc_code(), grpc_code::INTERNAL);
+    assert!(error.to_string().contains(&object_key), "{error:?}");
+    let rpc_error = harness
+        .registry
+        .invoke_rpc(
+            TENANT,
+            InvokeRpcRequest {
+                flow_id: "order-1".to_owned(),
+                rpc_name: "getOrder".to_owned(),
+                request_id: "rpc-missing-object".to_owned(),
+                ..InvokeRpcRequest::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(rpc_error.grpc_code(), grpc_code::INTERNAL);
+    assert!(rpc_error.to_string().contains(&object_key), "{rpc_error:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn purging_run_is_not_found_through_each_runtime_read() {
+    let harness = RuntimeHarness::new();
+    let run_id = start_flow(&harness, "order-1").await.unwrap();
+    seed_attribute(
+        &harness,
+        run_id,
+        "secret",
+        StoredValue {
+            kind: Some(stored_value::Kind::HardDeleteObject(
+                HardDeleteObjectReference {
+                    object_id: "already-deleted".to_owned(),
+                    is_string_value: true,
+                    ..HardDeleteObjectReference::default()
+                },
+            )),
+        },
+    );
+    let context = harness.registry.flow_context(&flow("order-1"));
+    let run_key = run_key(context.flow_hash, run_id, RunTable::RunRecord, &[]);
+    let mut record = RunRecord::decode(
+        harness
+            .store
+            .view()
+            .get(ColumnFamily::Flow, &run_key)
+            .unwrap()
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    record.status = FlowStatus::Completed as i32;
+    record.is_purging = true;
+    harness
+        .store
+        .put(ColumnFamily::Flow, run_key, record.encode_to_vec());
+
+    let assert_not_found = |error: RuntimeError| {
+        assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
+        assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
+        assert_eq!(error.to_string(), "flow order-1 does not exist");
+    };
+    assert_not_found(
+        harness
+            .registry
+            .get_attributes(TENANT, attributes_request("order-1", &[], true))
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .get_channel_messages(
+                TENANT,
+                GetChannelMessagesRequest {
+                    flow_id: "order-1".to_owned(),
+                    channel_name: "orders".to_owned(),
+                    ..GetChannelMessagesRequest::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .get_flow_state(
+                TENANT,
+                GetFlowStateRequest {
+                    flow_id: "order-1".to_owned(),
+                    ..GetFlowStateRequest::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .get_flow_summary(
+                TENANT,
+                GetFlowSummaryRequest {
+                    flow_id: "order-1".to_owned(),
+                    run_id: run_id.to_string(),
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .get_history_events(
+                TENANT,
+                GetHistoryEventsRequest {
+                    flow_id: "order-1".to_owned(),
+                    ..GetHistoryEventsRequest::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .load_blobs(
+                TENANT,
+                LoadBlobsRequest {
+                    entries: vec![LoadBlobRequestEntry {
+                        flow_id: "order-1".to_owned(),
+                        blob_value: Some(Value {
+                            kind: Some(value::Kind::InternalBlobIdForStringValue(
+                                ValueReference {
+                                    run_id,
+                                    value_id: ValueId {
+                                        run_seq: 1,
+                                        index_in_command: 0,
+                                    },
+                                }
+                                .to_string(),
+                            )),
+                        }),
+                    }],
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_flow(
+                TENANT,
+                WaitForFlowRequest {
+                    flow_id: "order-1".to_owned(),
+                    ..WaitForFlowRequest::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_attribute(
+                TENANT,
+                WaitForAttributeRequest {
+                    flow_id: "order-1".to_owned(),
+                    r#match: Some(AttributeMatch {
+                        key: "count".to_owned(),
+                        operator: AttributeMatchOperator::Equal as i32,
+                        operand: Some(Value {
+                            kind: Some(value::Kind::IntValue(1)),
+                        }),
+                    }),
+                    ..WaitForAttributeRequest::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_step_completion(
+                TENANT,
+                WaitForStepCompletionRequest {
+                    flow_id: "order-1".to_owned(),
+                    step_type: "Approve".to_owned(),
+                    step_execution_number: "1".to_owned(),
+                    ..WaitForStepCompletionRequest::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_history_event(
+                TENANT,
+                WaitForHistoryEventRequest {
+                    flow_id: "order-1".to_owned(),
+                    run_id: run_id.to_string(),
+                    next_internal_event_id: 1,
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .invoke_rpc(
+                TENANT,
+                InvokeRpcRequest {
+                    flow_id: "order-1".to_owned(),
+                    rpc_name: "getOrder".to_owned(),
+                    request_id: "rpc-purging".to_owned(),
+                    ..InvokeRpcRequest::default()
+                },
+            )
+            .await
+            .unwrap_err(),
     );
 }
 

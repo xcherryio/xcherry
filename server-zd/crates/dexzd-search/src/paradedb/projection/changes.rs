@@ -14,7 +14,7 @@ use dexzd_keyspace::{
     ColumnFamily, FlowHash, IndexKind, PartitionId, RunId, RunTable, TenantId, parse_run_key,
     partition_index_prefix, run_prefix,
 };
-use dexzd_protocol::dexzd::v1::SearchDocumentRecord;
+use dexzd_protocol::dexzd::v1::{RunRecord, SearchDocumentRecord};
 use prost::Message;
 
 use super::projector::ProjectionError;
@@ -48,6 +48,7 @@ pub fn extract_search_document_changes(
 ) -> Result<Vec<SearchDocumentChange>, ProjectionError> {
     let mut changes = Vec::new();
     let mut purged_runs = BTreeSet::new();
+    let mut purging_runs = BTreeSet::new();
     let mut indexed_deletes = BTreeSet::new();
     for write in &outcome.writes {
         match write {
@@ -56,6 +57,21 @@ pub fn extract_search_document_changes(
                 key,
                 value,
             } => {
+                if let Some((_, run_id)) = run_record_key(key)? {
+                    let record = RunRecord::decode(value.as_slice()).map_err(|error| {
+                        ProjectionError::InvalidState(format!(
+                            "decode committed run record for {run_id}: {error}"
+                        ))
+                    })?;
+                    if record.run_id != run_id.as_bytes() {
+                        return Err(ProjectionError::InvalidState(format!(
+                            "committed run record ID differs from key {run_id}"
+                        )));
+                    }
+                    if record.is_purging {
+                        purging_runs.insert((TenantId(record.tenant_id), run_id));
+                    }
+                }
                 if let Some((_, run_id)) = search_document_key(key)? {
                     let record =
                         SearchDocumentRecord::decode(value.as_slice()).map_err(|error| {
@@ -103,6 +119,15 @@ pub fn extract_search_document_changes(
             "run purge did not delete its SearchDocument index".into(),
         ));
     }
+    changes.retain(|change| {
+        !matches!(change, SearchDocumentChange::Upsert { tenant_id, run_id, .. }
+            if purging_runs.contains(&(*tenant_id, *run_id)))
+    });
+    changes.extend(
+        purging_runs
+            .into_iter()
+            .map(|(tenant_id, run_id)| SearchDocumentChange::Delete { tenant_id, run_id }),
+    );
     Ok(changes)
 }
 
@@ -130,6 +155,23 @@ fn search_document_key(key: &[u8]) -> Result<Option<(FlowHash, RunId)>, Projecti
     {
         return Err(ProjectionError::InvalidState(
             "malformed committed SearchDocument key".into(),
+        ));
+    }
+    Ok(Some((parsed.flow_hash, parsed.run_id)))
+}
+
+fn run_record_key(key: &[u8]) -> Result<Option<(FlowHash, RunId)>, ProjectionError> {
+    let Ok(parsed) = parse_run_key(key) else {
+        return Ok(None);
+    };
+    if parsed.table != RunTable::RunRecord {
+        return Ok(None);
+    }
+    if !parsed.suffix.is_empty()
+        || key != run_singleton_key(parsed.flow_hash, parsed.run_id, RunTable::RunRecord)
+    {
+        return Err(ProjectionError::InvalidState(
+            "malformed committed RunRecord key".into(),
         ));
     }
     Ok(Some((parsed.flow_hash, parsed.run_id)))

@@ -916,33 +916,67 @@ fn pending_outbox_defers_purge_and_purging_child_start_retries() {
         run_attempt: 0,
         kind: Some(timer_id::Kind::Retention(RetentionTimerId {})),
     };
-    assert_ok(&harness.apply(
+    let deferring = harness.apply(
         CHILD_ID,
         &FIRST_CHILD_RUN,
         Command::TimersFired(TimersFiredCommand {
             timers: vec![retention_timer.clone()],
         }),
-    ));
-    assert!(harness.record(CHILD_ID, FIRST_CHILD_RUN).is_purging);
-    let unavailable = harness.deliver_child_start(
-        [8; 16],
-        SECOND_CHILD_RUN,
-        "second",
-        SubFlowReusePolicy::Attach,
     );
-    assert!(matches!(
-        unavailable.reply.reply,
-        Some(command_reply::Reply::Error(error)) if error.grpc_code == 14
-    ));
-    assert!(unavailable.writes.is_empty());
-    assert_ok(&harness.apply(
-        CHILD_ID,
-        &FIRST_CHILD_RUN,
-        Command::RunPurge(RunPurgeCommand {}),
-    ));
+    assert_ok(&deferring);
+    assert!(
+        !deferring
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ApplyEffect::RunPurgeRequested { .. })),
+        "a pending outbox defers the purge before any object is deleted"
+    );
     let deferred = harness.record(CHILD_ID, FIRST_CHILD_RUN);
-    assert!(!deferred.is_purging);
-    assert!(deferred.retention_deadline_micros > original_deadline);
+    assert!(!deferred.is_purging, "a deferred run stays readable");
+    assert_eq!(
+        deferred.retention_deadline_micros,
+        harness.now_micros + 3600 * SECOND
+    );
+    let encoded_retention_timer = retention_timer.encode_to_vec();
+    for (deadline, is_current) in [
+        (original_deadline, false),
+        (deferred.retention_deadline_micros, true),
+    ] {
+        for key in [
+            retention_index_key(partition, deadline, child_hash, RunId(FIRST_CHILD_RUN)),
+            timer_index_key(
+                partition,
+                deadline,
+                child_hash,
+                RunId(FIRST_CHILD_RUN),
+                &encoded_retention_timer,
+            ),
+        ] {
+            assert_eq!(
+                harness
+                    .state
+                    .rows
+                    .contains_key(&(ColumnFamily::PartitionIndex, key)),
+                is_current
+            );
+        }
+    }
+    let rearmed_timer = TimerRecord::decode(
+        harness
+            .state
+            .get(
+                ColumnFamily::Flow,
+                &timer_key(child_hash, RunId(FIRST_CHILD_RUN), &encoded_retention_timer),
+            )
+            .unwrap()
+            .expect("re-armed retention timer")
+            .as_slice(),
+    )
+    .unwrap();
+    assert_eq!(
+        rearmed_timer.fire_at_micros,
+        deferred.retention_deadline_micros
+    );
     let report = harness
         .outbox(CHILD_ID, FIRST_CHILD_RUN)
         .pop()
@@ -960,6 +994,38 @@ fn pending_outbox_defers_purge_and_purging_child_start_retries() {
             .rows
             .contains_key(&(ColumnFamily::PartitionIndex, pending_index.clone()))
     );
+    assert_ok(&harness.apply(
+        CHILD_ID,
+        &FIRST_CHILD_RUN,
+        Command::OutboxAck(OutboxAckCommand {
+            message_ids: vec![report.message_id],
+        }),
+    ));
+    harness.now_micros = deferred.retention_deadline_micros;
+    let purging = harness.apply(
+        CHILD_ID,
+        &FIRST_CHILD_RUN,
+        Command::TimersFired(TimersFiredCommand {
+            timers: vec![retention_timer],
+        }),
+    );
+    assert_ok(&purging);
+    assert!(purging.effects.iter().any(|effect| matches!(
+        effect,
+        ApplyEffect::RunPurgeRequested { run_id } if *run_id == RunId(FIRST_CHILD_RUN)
+    )));
+    assert!(harness.record(CHILD_ID, FIRST_CHILD_RUN).is_purging);
+    let unavailable = harness.deliver_child_start(
+        [8; 16],
+        SECOND_CHILD_RUN,
+        "second",
+        SubFlowReusePolicy::Attach,
+    );
+    assert!(matches!(
+        unavailable.reply.reply,
+        Some(command_reply::Reply::Error(error)) if error.grpc_code == 14
+    ));
+    assert!(unavailable.writes.is_empty());
     let object_key = hard_delete_pending_key(child_hash, RunId(FIRST_CHILD_RUN), "object-1");
     let object_index = run_item_index_key(
         partition,
@@ -1012,21 +1078,6 @@ fn pending_outbox_defers_purge_and_purging_child_start_retries() {
             .rows
             .contains_key(&(ColumnFamily::PartitionIndex, flow_list_index.clone()))
     );
-    assert_ok(&harness.apply(
-        CHILD_ID,
-        &FIRST_CHILD_RUN,
-        Command::OutboxAck(OutboxAckCommand {
-            message_ids: vec![report.message_id],
-        }),
-    ));
-    harness.now_micros = deferred.retention_deadline_micros;
-    assert_ok(&harness.apply(
-        CHILD_ID,
-        &FIRST_CHILD_RUN,
-        Command::TimersFired(TimersFiredCommand {
-            timers: vec![retention_timer],
-        }),
-    ));
     assert_ok(&harness.apply(
         CHILD_ID,
         &FIRST_CHILD_RUN,

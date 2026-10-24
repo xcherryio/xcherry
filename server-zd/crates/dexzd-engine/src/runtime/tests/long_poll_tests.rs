@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use dexzd_apply::FlowStateReader;
+use dexzd_apply::{ApplyOutcome, FlowStateReader, StateWrite};
 use dexzd_keyspace::row_keys::history_record_key;
 use dexzd_keyspace::{ColumnFamily, RunId, RunTable, ValueId, ValueReference, run_key};
 use dexzd_protocol::dex::{
@@ -28,7 +28,9 @@ use crate::runtime::tests::fixtures::{
     TENANT, flow, int_value, set_attribute_request, start_flow, string_value,
 };
 use crate::runtime::tests::test_support::RuntimeHarness;
-use crate::runtime::{CommitUrgency, RuntimeConfig, RuntimeError, grpc_code};
+use crate::runtime::{
+    CommitUrgency, CommittedCommand, CommittedFlowCommand, RuntimeConfig, RuntimeError, grpc_code,
+};
 
 fn wait_for_flow_request(flow_id: &str, wait_time_seconds: i32) -> WaitForFlowRequest {
     WaitForFlowRequest {
@@ -193,6 +195,163 @@ async fn wait_for_flow_times_out_with_long_poll_time_out() {
         .await
         .unwrap_err();
     assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
+}
+
+#[tokio::test(start_paused = true)]
+async fn purging_run_is_not_found_by_each_wait_api_before_run_purge() {
+    let harness = RuntimeHarness::new();
+    let closed_run = start_flow(&harness, "closed-flow").await.unwrap();
+    let running_run = start_flow(&harness, "running-flow").await.unwrap();
+    for (flow_id, run_id, status) in [
+        ("closed-flow", closed_run, FlowStatus::Completed),
+        ("running-flow", running_run, FlowStatus::Running),
+    ] {
+        let context = harness.registry.flow_context(&flow(flow_id));
+        let record_key = run_key(context.flow_hash, run_id, RunTable::RunRecord, &[]);
+        let stored_record = harness
+            .store
+            .view()
+            .get(ColumnFamily::Flow, &record_key)
+            .unwrap()
+            .unwrap();
+        let mut record = RunRecord::decode(stored_record.as_slice()).unwrap();
+        record.status = status as i32;
+        record.is_purging = true;
+        harness
+            .store
+            .put(ColumnFamily::Flow, record_key, record.encode_to_vec());
+    }
+    let assert_not_found = |error: RuntimeError| {
+        assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND, "{error:?}");
+        assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
+    };
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_flow(TENANT, wait_for_flow_request("closed-flow", 30))
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_flow(
+                TENANT,
+                WaitForFlowRequest {
+                    run_id: closed_run.to_string(),
+                    ..wait_for_flow_request("closed-flow", 30)
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_attribute(
+                TENANT,
+                attribute_wait("running-flow", AttributeMatchOperator::Equal, 1),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_not_found(
+        harness
+            .registry
+            .wait_for_history_event(
+                TENANT,
+                WaitForHistoryEventRequest {
+                    flow_id: "closed-flow".to_owned(),
+                    run_id: closed_run.to_string(),
+                    next_internal_event_id: 1,
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn waiting_polls_end_when_the_committed_run_starts_purging() {
+    let harness = RuntimeHarness::new();
+    let run_id = start_flow(&harness, "order-1").await.unwrap();
+    let mut flow_wait = Box::pin(
+        harness
+            .registry
+            .wait_for_flow(TENANT, wait_for_flow_request("order-1", 30)),
+    );
+    let mut attribute_wait = Box::pin(harness.registry.wait_for_attribute(
+        TENANT,
+        attribute_wait("order-1", AttributeMatchOperator::Equal, 1),
+    ));
+    let mut history_wait = Box::pin(harness.registry.wait_for_history_event(
+        TENANT,
+        WaitForHistoryEventRequest {
+            flow_id: "order-1".to_owned(),
+            run_id: run_id.to_string(),
+            next_internal_event_id: 999,
+        },
+    ));
+    assert_pending(flow_wait.as_mut()).await;
+    assert_pending(attribute_wait.as_mut()).await;
+    assert_pending(history_wait.as_mut()).await;
+    assert_eq!(harness.registry.long_poll_waiter_count(), 3);
+
+    let address = flow("order-1");
+    let context = harness.registry.flow_context(&address);
+    let record_key = run_key(context.flow_hash, run_id, RunTable::RunRecord, &[]);
+    let stored_record = harness
+        .store
+        .view()
+        .get(ColumnFamily::Flow, &record_key)
+        .unwrap()
+        .unwrap();
+    let mut record = RunRecord::decode(stored_record.as_slice()).unwrap();
+    record.status = FlowStatus::Completed as i32;
+    record.is_purging = true;
+    let encoded_record = record.encode_to_vec();
+    harness.store.put(
+        ColumnFamily::Flow,
+        record_key.clone(),
+        encoded_record.clone(),
+    );
+    harness.registry.apply_committed(CommittedFlowCommand {
+        command: FlowCommand {
+            tenant_id: TENANT.0,
+            flow_id: "order-1".to_owned(),
+            run_id: run_id.as_bytes().to_vec(),
+            ..FlowCommand::default()
+        },
+        context,
+        committed: CommittedCommand {
+            outcome: ApplyOutcome {
+                writes: vec![StateWrite::Put {
+                    column_family: ColumnFamily::Flow,
+                    key: record_key,
+                    value: encoded_record,
+                }],
+                effects: Vec::new(),
+                reply: Default::default(),
+                run_id: Some(run_id),
+            },
+            position: Default::default(),
+        },
+    });
+    let (flow_result, attribute_result, history_result) =
+        tokio::time::timeout(Duration::from_millis(100), async {
+            tokio::join!(flow_wait, attribute_wait, history_wait)
+        })
+        .await
+        .expect("all registered polls wake promptly when the run starts purging");
+    for error in [
+        flow_result.unwrap_err(),
+        attribute_result.unwrap_err(),
+        history_result.unwrap_err(),
+    ] {
+        assert_eq!(error.grpc_code(), grpc_code::NOT_FOUND);
+        assert_eq!(error.sub_status(), ErrorSubStatus::FlowNotExists);
+    }
+    assert_eq!(harness.registry.long_poll_waiter_count(), 0);
 }
 
 #[tokio::test(start_paused = true)]

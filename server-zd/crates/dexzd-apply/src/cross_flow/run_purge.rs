@@ -19,12 +19,12 @@ use dexzd_protocol::dexzd::v1::{
 };
 use prost::Message;
 
-use crate::ApplyError;
 use crate::command_handlers::command_replies::{error_reply, grpc_code, ok_reply};
 use crate::command_handlers::run_cursor::{HistoryKind, RunCursor};
 use crate::command_handlers::{CommandScope, HandlerOutput, HandlerResult};
 use crate::state_access::{FlowTransaction, RunRows, read_flow_directory, write_flow_directory};
 use crate::steps::arm_timer;
+use crate::{ApplyEffect, ApplyError};
 
 const RETENTION_RETRY_MICROS: i64 = 60 * 60 * 1_000_000;
 
@@ -65,6 +65,22 @@ pub(crate) fn apply_hard_delete_objects_deleted(
     )?))
 }
 
+/// Postpones retention while an outbox item is unacknowledged; otherwise starts the purge, which is final.
+pub(crate) fn on_retention_fired(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    scope: &CommandScope<'_>,
+) -> Result<(), ApplyError> {
+    if has_unacknowledged_outbox(transaction, cursor.rows)? {
+        postpone_retention(transaction, cursor, scope.now_micros);
+        return Ok(());
+    }
+    cursor.record.is_purging = true;
+    let run_id = cursor.run_id();
+    cursor.add_effect(ApplyEffect::RunPurgeRequested { run_id });
+    Ok(())
+}
+
 /// Purges all run rows and every derived partition index computable from those rows.
 pub(crate) fn apply_run_purge(
     transaction: &mut FlowTransaction<'_>,
@@ -94,37 +110,7 @@ pub(crate) fn apply_run_purge(
             "run retention has not requested purge",
         )));
     }
-    if has_unacknowledged_outbox(transaction, rows)? {
-        let previous_deadline = record.retention_deadline_micros;
-        let mut cursor = RunCursor::for_new_run(rows, record);
-        cursor.record.is_purging = false;
-        let retry_deadline = scope.now_micros.saturating_add(RETENTION_RETRY_MICROS);
-        cursor.record.retention_deadline_micros = retry_deadline;
-        transaction.delete(
-            ColumnFamily::PartitionIndex,
-            retention_index_key(partition, previous_deadline, flow_hash, run_id),
-        );
-        arm_timer(
-            transaction,
-            &mut cursor,
-            &TimerId {
-                run_attempt: 0,
-                kind: Some(timer_id::Kind::Retention(RetentionTimerId {})),
-            },
-            retry_deadline,
-        );
-        transaction.put(
-            ColumnFamily::PartitionIndex,
-            retention_index_key(partition, retry_deadline, flow_hash, run_id),
-            Vec::new(),
-        );
-        return Ok(HandlerResult::Applied(cursor.finish(
-            transaction,
-            scope,
-            ok_reply(),
-            HistoryKind::BOOKKEEPING,
-        )?));
-    }
+    // Retention already decided the purge and objects may be deleted, so it never postpones.
     remove_timer_indexes(transaction, rows)?;
     remove_outbox_indexes(transaction, rows)?;
     remove_hard_delete_indexes(transaction, rows)?;
@@ -193,6 +179,37 @@ pub(crate) fn apply_run_purge(
         run_id: Some(run_id),
         replayed: None,
     }))
+}
+
+fn postpone_retention(
+    transaction: &mut FlowTransaction<'_>,
+    cursor: &mut RunCursor,
+    now_micros: i64,
+) {
+    let partition = transaction.context().partition;
+    let flow_hash = cursor.rows.flow_hash;
+    let run_id = cursor.run_id();
+    let previous_deadline = cursor.record.retention_deadline_micros;
+    let retry_deadline = now_micros.saturating_add(RETENTION_RETRY_MICROS);
+    cursor.record.retention_deadline_micros = retry_deadline;
+    transaction.delete(
+        ColumnFamily::PartitionIndex,
+        retention_index_key(partition, previous_deadline, flow_hash, run_id),
+    );
+    arm_timer(
+        transaction,
+        cursor,
+        &TimerId {
+            run_attempt: 0,
+            kind: Some(timer_id::Kind::Retention(RetentionTimerId {})),
+        },
+        retry_deadline,
+    );
+    transaction.put(
+        ColumnFamily::PartitionIndex,
+        retention_index_key(partition, retry_deadline, flow_hash, run_id),
+        Vec::new(),
+    );
 }
 
 fn has_unacknowledged_outbox(

@@ -21,7 +21,7 @@ use dexzd_protocol::dex::{
     invoke_execute_method_output, invoke_wait_for_method_output, poll_worker_task,
     poll_worker_task_frame, poll_worker_task_request, poll_worker_task_response,
 };
-use s3mock::{Durability, EtagMode, ListObjectsRequest, Store, StoreConfig};
+use s3mock::{DeleteObjectRequest, Durability, EtagMode, ListObjectsRequest, Store, StoreConfig};
 use s3mock_server::{ServerConfig, ServerHandle, SignatureVerification};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
@@ -162,6 +162,21 @@ impl S3Emulator {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     }
 
+    /// Removes every fault rule and releases requests that a delay rule still holds.
+    pub(crate) async fn clear_fault_rules(&self) {
+        let response = self.admin_request("DELETE", "/_s3mock/faults", "").await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+
+    /// Deletes every object in `bucket` whose key starts with `prefix`, bypassing fault rules.
+    pub(crate) fn delete_keys_under(&self, bucket: &str, prefix: &str) {
+        for key in self.keys_under(bucket, prefix) {
+            self.store
+                .delete_object(bucket, &key, &DeleteObjectRequest::default())
+                .expect("the emulator deletes the object");
+        }
+    }
+
     /// Returns the emulator's JSON log of recent requests.
     pub(crate) async fn request_log(&self) -> String {
         self.admin_request("GET", "/_s3mock/requests", "").await
@@ -217,6 +232,16 @@ impl ServeConfig<'_> {
     /// Writes the YAML file that `serve --config` reads.
     pub(crate) fn write(&self, path: &Path) {
         self.write_with_snapshot_schedule(path, "1h", "24h");
+    }
+
+    /// Writes the YAML file with `retention.closedFlowDuration` set to `closed_flow_duration`.
+    pub(crate) fn write_with_closed_flow_retention(&self, path: &Path, closed_flow_duration: &str) {
+        self.write(path);
+        let mut contents = fs::read_to_string(path).expect("the serve configuration is readable");
+        contents.push_str(&format!(
+            "retention:\n  closedFlowDuration: {closed_flow_duration}\n"
+        ));
+        fs::write(path, contents).expect("the serve configuration is written");
     }
 
     /// Writes the YAML file with the given `snapshot.interval` and `snapshot.logDeletionDelay`.

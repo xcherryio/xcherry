@@ -130,8 +130,8 @@ pub(crate) fn resolve_command_run(
 
 /// Returns the run and its record that a read targets.
 ///
-/// Returns `NOT_FOUND` + `FLOW_NOT_EXISTS` when the run does not exist or belongs to another
-/// Flow.
+/// Returns `NOT_FOUND` + `FLOW_NOT_EXISTS` when the run does not exist, belongs to another
+/// Flow, or is purging.
 pub(crate) fn read_run(
     state: &dyn FlowStateReader,
     context: ApplyContext,
@@ -146,7 +146,11 @@ pub(crate) fn read_run(
         "run",
     )?;
     match record {
-        Some(record) if record.flow_id == flow.flow_id && record.tenant_id == flow.tenant_id.0 => {
+        Some(record)
+            if record.flow_id == flow.flow_id
+                && record.tenant_id == flow.tenant_id.0
+                && !record.is_purging =>
+        {
             Ok(ResolvedRun { run_id, record })
         }
         _ => Err(RuntimeError::flow_not_found(&flow.flow_id)),
