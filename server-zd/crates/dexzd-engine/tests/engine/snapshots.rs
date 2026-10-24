@@ -26,11 +26,18 @@ use crate::harness::{CountingApplier, PARTITION_COUNT, RecordingRuntime, TestClu
 #[derive(Default)]
 struct DelayedSnapshotDelete {
     is_armed: AtomicBool,
+    should_fail_manifest_put: AtomicBool,
     entered: Notify,
 }
 
 impl FaultInjector for DelayedSnapshotDelete {
     fn action(&self, operation: ObjectStoreOperation, key: &str) -> FaultAction {
+        if operation == ObjectStoreOperation::Put
+            && key.contains("/manifest/")
+            && self.should_fail_manifest_put.swap(false, Ordering::SeqCst)
+        {
+            return FaultAction::FailBeforeEffect;
+        }
         if operation == ObjectStoreOperation::Delete
             && key.is_empty()
             && self.is_armed.swap(false, Ordering::SeqCst)
@@ -828,4 +835,166 @@ async fn reused_local_store_starts_a_new_snapshot_lineage() {
             .all(|file| lineage_of(&file.object_key) == successor_lineage)
     );
     successor.node.shutdown().await.expect("lease released");
+}
+
+#[tokio::test(start_paused = true)]
+async fn reused_rocksdb_store_snapshot_survives_old_owners_in_flight_orphan_delete() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let original_store_directory = directory.path().join("original-store");
+    let reused_store_directory = directory.path().join("reused-store");
+    let mut cluster = TestCluster::new();
+    let delayed_delete = Arc::new(DelayedSnapshotDelete::default());
+    cluster.object_store = Arc::new(InMemoryObjectStore::with_injector_and_clock(
+        delayed_delete.clone(),
+        cluster.clock.clone(),
+    ));
+    let mut original_config = cluster.config(LocalStoreConfig::RocksDb {
+        directory: original_store_directory.clone(),
+        options: RocksDbStoreOptions::default(),
+    });
+    original_config.snapshots.deletion_delay = Duration::ZERO;
+
+    let initial_owner = cluster
+        .start_with(&original_config)
+        .await
+        .expect("initial owner starts");
+    initial_owner.commit_prompt("reused-orphan-flow", 1).await;
+    delayed_delete
+        .should_fail_manifest_put
+        .store(true, Ordering::SeqCst);
+    initial_owner
+        .node
+        .take_snapshot()
+        .await
+        .expect_err("manifest upload fails after file uploads");
+    assert!(snapshot_manifest_keys(&cluster).await.is_empty());
+    let orphan_keys = snapshot_object_keys(&cluster).await;
+    let first_orphan_key = orphan_keys
+        .first()
+        .expect("failed upload left orphan files");
+    let previous_lineage = lineage_of(first_orphan_key);
+    initial_owner
+        .node
+        .shutdown()
+        .await
+        .expect("initial lease released");
+
+    // A closed-store copy lets both owners hold the same RocksDB state during the overlapping DELETE.
+    std::fs::create_dir(&reused_store_directory).expect("create reused store directory");
+    for entry in
+        std::fs::read_dir(&original_store_directory).expect("read original store directory")
+    {
+        let entry = entry.expect("read original store entry");
+        let destination = reused_store_directory.join(entry.file_name());
+        std::fs::copy(entry.path(), destination).expect("copy closed RocksDB file");
+    }
+
+    let former_owner = cluster
+        .start_with(&original_config)
+        .await
+        .expect("former owner reopens the original store");
+    delayed_delete.is_armed.store(true, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(3)).await;
+    delayed_delete.entered.notified().await;
+    assert!(
+        cluster
+            .object_store
+            .get(first_orphan_key)
+            .await
+            .expect("read in-flight orphan")
+            .is_some()
+    );
+    cluster.expire_lease_of("node-a").await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(matches!(
+        former_owner.node.wait_for_stop().await,
+        NodeStopReason::LeaseLost { .. }
+    ));
+
+    let object_keys_before_successor = snapshot_object_keys(&cluster).await;
+    let mut successor_config = cluster.config(LocalStoreConfig::RocksDb {
+        directory: reused_store_directory,
+        options: RocksDbStoreOptions::default(),
+    });
+    successor_config.snapshots.deletion_delay = Duration::from_secs(24 * 60 * 60);
+    let successor = cluster
+        .start_with(&successor_config)
+        .await
+        .expect("successor reopens the existing RocksDB store");
+    assert_eq!(successor.committed_count("reused-orphan-flow").await, 1);
+    let successor_reference = successor
+        .node
+        .take_snapshot()
+        .await
+        .expect("successor snapshot");
+    let successor_lineage = lineage_of(&successor_reference.manifest_key);
+    assert_ne!(successor_lineage, previous_lineage);
+    let newly_written_keys: Vec<String> = snapshot_object_keys(&cluster)
+        .await
+        .into_iter()
+        .filter(|key| !object_keys_before_successor.contains(key))
+        .collect();
+    assert!(!newly_written_keys.is_empty());
+    assert!(
+        newly_written_keys
+            .iter()
+            .all(|key| lineage_of(key) == successor_lineage)
+    );
+    let content = cluster
+        .object_store
+        .get(&successor_reference.manifest_key)
+        .await
+        .expect("read successor manifest")
+        .expect("successor manifest exists");
+    let successor_manifest = SnapshotManifest::decode(content.bytes).expect("decode manifest");
+    assert!(!successor_manifest.files.is_empty());
+    assert!(
+        successor_manifest
+            .files
+            .iter()
+            .all(|file| lineage_of(&file.object_key) == successor_lineage)
+    );
+
+    tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::task::yield_now().await;
+    for key in &orphan_keys {
+        assert!(
+            cluster
+                .object_store
+                .get(key)
+                .await
+                .expect("read deleted orphan")
+                .is_none(),
+            "{key} was deleted"
+        );
+    }
+    for file in &successor_manifest.files {
+        assert!(
+            cluster
+                .object_store
+                .get(&file.object_key)
+                .await
+                .expect("read successor file")
+                .is_some(),
+            "{} survives the old owner's delete",
+            file.object_key
+        );
+    }
+    former_owner
+        .node
+        .shutdown()
+        .await
+        .expect("stopped node shuts down");
+    successor.node.shutdown().await.expect("lease released");
+
+    let restore_config = cluster.config(LocalStoreConfig::RocksDb {
+        directory: directory.path().join("restored-store"),
+        options: RocksDbStoreOptions::default(),
+    });
+    let restored = cluster
+        .start_with(&restore_config)
+        .await
+        .expect("snapshot restores into a fresh RocksDB store");
+    assert_eq!(restored.committed_count("reused-orphan-flow").await, 1);
+    restored.node.shutdown().await.expect("lease released");
 }

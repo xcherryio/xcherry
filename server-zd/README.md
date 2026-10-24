@@ -71,6 +71,15 @@ Startup proceeds in this order:
 4. gRPC health reports SERVING for `""`, `dex.FlowService`, and `dex.WorkerTaskService` on
    `api.listen`.
 
+### Snapshot uploads after ownership changes
+
+The first snapshot after every takeover or restart uploads every file in the local checkpoint to
+a fresh lineage. It cannot reuse objects from the previous lineage, even when the local RocksDB
+directory is reused. Expect uploads approximately equal to the full checkpoint size, plus manifest
+data. Transfer time is at least checkpoint bytes divided by effective upload throughput, plus
+checkpoint and per-file request time. For example, 10 GiB at 100 MiB/s takes at least about 102
+seconds to transfer. Later snapshots from the same owner can reuse unchanged files.
+
 `search.backend: builtin` serves SearchFlows from committed local search documents.
 
 `search.backend: paradedb` serves SearchFlows from ParadeDB:
